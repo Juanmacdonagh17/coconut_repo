@@ -5,6 +5,7 @@
 #include <ctype.h> 
 #include <curl/curl.h> // guarda que acá en el gcc tengo que pasar manualmente donde esta (path de miniconda)
 
+// path local para el gcc: -I/home/juan/miniconda3/include -L/home/juan/miniconda3/lib -lcurl
 
 // this are the pointers, i have no idea about pointers
 #define CODON_LENGTH 3
@@ -30,7 +31,15 @@ struct MemoryStruct {
 typedef struct {
     char id[ID_LENGTH]; 
     CodonCount counts[MAX_CODONS];
-} SequenceCodonCounts;
+    char sequence[MAX_LINE_LENGTH * 10]; // adjust size??
+    } SequenceCodonCounts;
+
+typedef struct {
+    char transcript_id[ID_LENGTH];
+    char domain_name[ID_LENGTH];
+    int start;
+    int end;
+} SliceInstruction;
 
 const char* codons[MAX_CODONS] = { // 64 codons, nothing wierd here 
     "AAA", "AAC", "AAG", "AAT", "ACA", "ACC", "ACG", "ACT",
@@ -161,6 +170,8 @@ void initializeCodonCounts(SequenceCodonCounts *seq) {
         seq->counts[i].cu = 0.0; // start CU at 0 :P 
         // maybe here too we should start RSCU at 0?
     }
+    seq->sequence[0] = '\0'; // Initialize sequence to empty string
+
 }
 
 void countCodons(char *sequence, SequenceCodonCounts *seq) {
@@ -225,7 +236,6 @@ void calculateRSCU(SequenceCodonCounts *seq) {
     }
 }
 
-
 ////////////////////////
 // CSV functions:     //
 ////////////////////////
@@ -259,7 +269,98 @@ void writeCsvRow(FILE *file, SequenceCodonCounts *seq, bool includeCU, bool incl
 }
 
 
-// flag handeling, file name, etc 
+////////////////////////
+// slicer functions:  //
+////////////////////////
+
+void parseSliceFile(char *filename, SliceInstruction **instructions, int *count) {
+    FILE *file = fopen(filename, "r");
+    if (!file) {
+        fprintf(stderr, "Error opening slice file: %s\n", filename);
+        exit(1);
+    }
+
+    char line[MAX_LINE_LENGTH];
+    int instr_count = 0;
+    SliceInstruction *temp_instructions = malloc(100 * sizeof(SliceInstruction));
+
+    while (fgets(line, sizeof(line), file)) {
+        line[strcspn(line, "\r\n")] = '\0';  // Remove newline
+
+        // Split the line by commas (ID, domain_name, range)
+        char *token = strtok(line, ",");
+        strcpy(temp_instructions[instr_count].transcript_id, token);
+
+        token = strtok(NULL, ",");
+        strcpy(temp_instructions[instr_count].domain_name, token);
+
+        token = strtok(NULL, ":");
+        temp_instructions[instr_count].start = atoi(token) - 1;  // Convert start to zero-index
+
+        token = strtok(NULL, ":");
+        temp_instructions[instr_count].end = atoi(token) - 1;    // Convert end to zero-index
+
+        instr_count++;
+    }
+
+    *instructions = temp_instructions;
+    *count = instr_count;
+
+    fclose(file);
+}
+
+
+// be aware that you need to select the # of codon (that is also the corresponding position of the Aa in the sequence!)
+// a seuqnece that has 30 nt, has 10 codons, and so 10 Aa. If you use "30" for the last Aa, it will raise an out of bounds error
+// maybe add a flag for this?
+
+void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructions, int instr_count, FILE *output, bool calculate_cu, bool calculate_rscu) {
+    for (int i = 0; i < instr_count; i++) {
+        if (strcmp(seq->id, instructions[i].transcript_id) == 0) {
+            printf("Slicing: %s from %d to %d\n", instructions[i].transcript_id, instructions[i].start  +1, instructions[i].end  +1);
+
+            int start_pos = instructions[i].start * CODON_LENGTH;
+            int end_pos = (instructions[i].end + 1) * CODON_LENGTH;
+
+            int seq_length = strlen(seq->sequence);
+
+            if (start_pos >= seq_length || end_pos > seq_length) {
+                fprintf(stderr, "Slice out of bounds for %s: %d-%d\n", seq->id, instructions[i].start +1, instructions[i].end +1);
+                continue;
+            }
+
+            int slice_length = end_pos - start_pos;
+            char sliced_sequence[slice_length + 1];
+
+            strncpy(sliced_sequence, seq->sequence + start_pos, slice_length);
+            sliced_sequence[slice_length] = '\0';
+
+            // Process the sliced sequence
+            SequenceCodonCounts slicedSeq;
+            initializeCodonCounts(&slicedSeq);
+            strncpy(slicedSeq.id, instructions[i].domain_name, sizeof(slicedSeq.id) - 1);
+            slicedSeq.id[sizeof(slicedSeq.id) - 1] = '\0';
+            strncpy(slicedSeq.sequence, sliced_sequence, sizeof(slicedSeq.sequence) - 1);
+            slicedSeq.sequence[sizeof(slicedSeq.sequence) - 1] = '\0';
+
+            countCodons(sliced_sequence, &slicedSeq);
+
+            if (calculate_cu) {
+                calculateCU(&slicedSeq);
+            }
+            if (calculate_rscu) {
+                calculateRSCU(&slicedSeq);
+            }
+
+            writeCsvRow(output, &slicedSeq, calculate_cu, calculate_rscu);
+        }
+    }
+}
+
+
+////////////////////////
+//       main         //
+////////////////////////
 
 int main(int argc, char *argv[]) {
     bool calculate_cu = false;
@@ -267,7 +368,9 @@ int main(int argc, char *argv[]) {
     bool silent = false;  // silent flag so you don't get all the printf or fprintf:
     bool fetch_sequence = false;
     bool fetch_from_file = false; // fetch from a .txt
+    bool slice_sequence = false;
 
+    char *slice_filename = NULL;  // Path to slice file
     char *input_filename = NULL;
     char *output_filename = NULL;
     char *protein_id = NULL;
@@ -299,6 +402,12 @@ int main(int argc, char *argv[]) {
             calculate_cu = true;
             calculate_rscu = true;
 
+    
+        } else if (strcmp(argv[i], "-slice_domains") == 0 && i + 1 < argc) {
+            slice_sequence = true;
+            slice_filename = argv[++i];  // Get the path to the slice file
+    
+
         } else if (strcmp(argv[i], "-help") == 0) {
 
             printf("Usage: %s [options] <input.fasta> <output.csv>\n", argv[0]);
@@ -309,6 +418,7 @@ int main(int argc, char *argv[]) {
             printf("  -silent\tHide outputs from the console\n");
             printf("  -fetch\tFetch sequence from Ensembl using transcript ID (ENST) (no <input.fasta>)\n");
             printf("  -fetchfile\tFetch multiple sequences from a text file (ENSTs)\n");
+            printf("  -slice_domains\tSlice fasta into domains using a csv style file\n");
 
             printf("\n");
             printf("\n");
@@ -325,7 +435,7 @@ int main(int argc, char *argv[]) {
     }
 
     if ((!input_filename || !output_filename) && !fetch_sequence && !fetch_from_file) {
-        fprintf(stderr, "Usage: %s [-cu] [-rscu] [-all] [-silent] [-fetch] [-fetchfile] [-help] <input.fasta> <output.csv>\n", argv[0]);
+        fprintf(stderr, "Usage: %s [-cu] [-rscu] [-all] [-silent] [-fetchfile] [-fetch_list] [-slice_domains] [-help] <slice.csv> <input.fasta> <output.csv>\n", argv[0]);
         return 1;
     }
 
@@ -409,7 +519,9 @@ int main(int argc, char *argv[]) {
             printf("Fetched Sequence:\n%s\n", sequence_data);
         }
         if (!sequence_data) {
-            if (!silent) fprintf(stderr, "Failed to fetch sequence for ENST ID: %s\n", enst_id);
+            if (!silent) {
+                fprintf(stderr, "Failed to fetch sequence for ENST ID: %s. Skipping...\n", enst_id);
+            }
             continue;  // Skip this ENST and proceed to the next
         }
 
@@ -440,7 +552,8 @@ int main(int argc, char *argv[]) {
         FILE *input = fopen(input_filename, "r");
         if (!input) {
             if (!silent) {
-                fprintf(stderr, "Failed to open sequence for protein ID: %s\n", protein_id); // esto esta mal? ya estamos en el input
+                fprintf(stderr, "Failed to open input file: %s\n", input_filename);
+
             }
             fclose(output);  // close the file before returning
             return 1;
@@ -478,24 +591,36 @@ int main(int argc, char *argv[]) {
                 for (int i = 0; line[i]; i++) {
                     line[i] = toupper(line[i]); // convert to uppercase
                 }
+
+                strcat(currentSequence.sequence, line);
                 countCodons(line, &currentSequence);
             }
         }
+        
 
         if (active) { // final sequence processing
-            if (calculate_cu) {
-                calculateCU(&currentSequence);
+            if (slice_sequence) {
+                SliceInstruction *instructions;
+                int slice_count;
+                parseSliceFile(slice_filename, &instructions, &slice_count);
+                
+                sliceAndWriteSequence(&currentSequence, instructions, slice_count, output, calculate_cu, calculate_rscu);
+                free(instructions);
+            } else {
+                if (calculate_cu) {
+                    calculateCU(&currentSequence);
+                }
+                if (calculate_rscu) {
+                    calculateRSCU(&currentSequence);
+                }
+                if (!silent) {
+                    fprintf(stderr, "Processing protein ID: %s:\n", currentSequence.id);
+                    writeCsvRow(stdout, &currentSequence, calculate_cu, calculate_rscu);
+                    fprintf(stderr, "\n");
+                }
+                writeCsvRow(output, &currentSequence, calculate_cu, calculate_rscu);
             }
-            if (calculate_rscu) {
-                calculateRSCU(&currentSequence);
-            }
-        if (!silent) { // this only makes sure that it prints the ID and the process for the last fasta in a multi fasta. it seats here, out of the while loop
-            fprintf(stderr, "Procesing protein ID: %s:\n", currentSequence.id);
-            writeCsvRow(stdout, &currentSequence, calculate_cu, calculate_rscu);  // print to console
-            fprintf(stderr, "\n");
-        }
-        writeCsvRow(output, &currentSequence, calculate_cu, calculate_rscu);  // write to CSV file
-        }
+        }   
 
         fclose(input);
     }
