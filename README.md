@@ -40,5 +40,9 @@ Using the -help flag will provide a list of all available commands.
 | Slice domains from fetch                    | ❌        |
 | Calculate MinMax                            | ❌        |
 | Fetch domains from InterPro                 | ❌        |
+| Incorrect length error                      | ❌        |
+| Optional flags (no ATG, no STOP, etc        | ❌        |
+
+
 
 
