@@ -15,6 +15,6 @@ gcc -o coconut coconut.c -I/home/path/to/miniconda3/include -L/home/path/to/mini
 ```
 Replace /path/to with the folder where Conda was installed.
 
-To run Coconut, just execute ./coconut in the command line.
+To run coconut.c, just execute ./coconut in the command line.
 Using the -help flag will provide a list of all available commands.
 
