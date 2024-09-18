@@ -44,6 +44,7 @@ Using the -help flag will provide a list of all available commands.
 | Fetch domains from InterPro                 | ❌        |
 | Incorrect length error                      | ❌        |
 | Optional flags (no ATG, no STOP, etc        | ❌        |
+| Docker image                                | ❌        |
 
 
 
