@@ -3,7 +3,7 @@ Be aware of bugs, especially tyranids.***
 
 ---
 
-![alt text](https://github.com/Juanmacdonagh17/coconut_repo/blob/main/logo/Natural-fresh-coconut-illustration-Premium-Vector-PNG.png)
+![alt text](https://github.com/Juanmacdonagh17/coconut_repo/blob/main/logo/logo2.svg)
 
 # Coconut: 
 ## A suite for transcripts and codon calculations
