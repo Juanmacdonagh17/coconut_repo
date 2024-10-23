@@ -37,14 +37,16 @@ Using the -help flag will provide a list of all available commands.
 | Fetch ENST from Ensembl                     | ✅        |
 | Fetch multiple ENSTs from list (Ensembl)    | ✅        |
 | Slice domains from FASTA/multi-FASTA        | ✅        |
+| Calculate MinMax                            | ✅        |
+| Docker image                                | ✅        |
 | Fetch multiple versions of a transcript     | ⏰        |
-| Slice domains from fetch                    | ❌        |
-| Slice multiple versions of a transcript & er| ❌        |
-| Calculate MinMax                            | ⏰        |
-| Fetch domains from InterPro                 | ❌        |
+| Slice domains from fetch                    | ⏰        |
+| Slice multiple versions of a transcript & er| ⏰        |
+| Fetch domains from InterPro or CATH         | ❌        |
 | Incorrect length error                      | ❌        |
-| Optional flags (no ATG, no STOP, etc        | ❌        |
-| Docker image                                | ⏰        |
+| Optional flags (no ATG, no STOP, etc)       | ❌        |
+| MobiDB integration for disorder regions     | ❌        |
+
 
 
 
