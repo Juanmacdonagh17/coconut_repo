@@ -1,3 +1,10 @@
+
+
+/////////////////////////
+//        libs         //
+/////////////////////////
+
+// libraries that are needed
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -7,19 +14,38 @@
 
 // path local para el gcc: -I/home/juan/miniconda3/include -L/home/juan/miniconda3/lib -lcurl
 
-// this are the pointers, i have no idea about pointers
+
+/////////////////////////
+//  structures         //
+/////////////////////////
+
+// pointers
 #define CODON_LENGTH 3
 #define MAX_CODONS 64
 #define MAX_LINE_LENGTH 1024 // maybe play around with this, so it can take longer sequences?
+#define MAX_SEQUENCE_LENGTH 200000 
 #define ID_LENGTH 512 // hopefully 512 is big enough, codonw tends to cut off the id
 #define API_URL_FORMAT "https://rest.ensembl.org/sequence/id/%s?object_type=transcript;type=cds;content-type=text/x-fasta"  // dynamic ID URL
+// here we could define a new API_URL_FORMAT where instead of one it gets all of the different versions of the transcirpt using multiple_sequences=1
+// #define API_URL_FORMAT_MULT "https://rest.ensembl.org/sequence/id/%s?object_type=transcript;type=cds;content-type=text/x-fasta;multiple_sequences=1
+// there needs to be a flag in main and then it should be treated as a multifasta within the fetch and multi fetch :)
 
-// numbers that we will use as output
+
+
+// structures that we will use as output
 typedef struct {
     char codon[CODON_LENGTH + 1];
+
     int count; // count
+    int amino_acid_index; // for minmax
+
     float cu; // codon usage
     float rscu; // relative synonymous codon usage
+    float usage; // for minmax
+    float max; // for minmax
+    float min; // for minmax
+    float ave; // for minmax
+
 } CodonCount;
 
 // structure to handle HTTP response
@@ -28,12 +54,14 @@ struct MemoryStruct {
     size_t size;
 };
 
+// structure for protein ID, codon count and nt seq
 typedef struct {
     char id[ID_LENGTH]; 
     CodonCount counts[MAX_CODONS];
-    char sequence[MAX_LINE_LENGTH * 10]; // adjust size??
+    char sequence[MAX_SEQUENCE_LENGTH]; // adjust size??
     } SequenceCodonCounts;
 
+// structure for slicig and domain analysis
 typedef struct {
     char transcript_id[ID_LENGTH];
     char domain_name[ID_LENGTH];
@@ -41,7 +69,19 @@ typedef struct {
     int end;
 } SliceInstruction;
 
-const char* codons[MAX_CODONS] = { // 64 codons, nothing wierd here 
+// minmax params
+typedef struct {
+    float usage;
+    float max;
+    float min;
+    float ave;
+    int amino_acid_index;
+} CodonUsageStats;
+CodonUsageStats codon_usage_stats[4][4][4]; 
+
+
+// 64 codons
+const char* codons[MAX_CODONS] = { 
     "AAA", "AAC", "AAG", "AAT", "ACA", "ACC", "ACG", "ACT",
     "AGA", "AGC", "AGG", "AGT", "ATA", "ATC", "ATG", "ATT",
     "CAA", "CAC", "CAG", "CAT", "CCA", "CCC", "CCG", "CCT",
@@ -52,7 +92,7 @@ const char* codons[MAX_CODONS] = { // 64 codons, nothing wierd here
     "TGA", "TGC", "TGG", "TGT", "TTA", "TTC", "TTG", "TTT"
 };
 
-// correct order of Aa, stops are coded as "*":
+// Aa list, stops are coded as "*"
 const char amino_acids[MAX_CODONS] = {
     'K', 'N', 'K', 'N', 'T', 'T', 'T', 'T',
     'R', 'S', 'R', 'S', 'I', 'I', 'M', 'I',
@@ -64,17 +104,22 @@ const char amino_acids[MAX_CODONS] = {
     '*', 'C', 'W', 'C', 'L', 'F', 'L', 'F'
 };
 
+/////////////////////////
+//     functions       //
+/////////////////////////
+
 ////////////////////////
 // request functions: //
 ////////////////////////
 
+// using libcurl to write the fetched data into a memory buffer
 static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, void *userp) {
     size_t realsize = size * nmemb;
     struct MemoryStruct *mem = (struct MemoryStruct *)userp;
 
     char *ptr = realloc(mem->memory, mem->size + realsize + 1);
     if(ptr == NULL) {
-        // Out of memory error
+        // out of memory error
         return 0;
     }
 
@@ -113,7 +158,8 @@ char* fetchProteinSequence(const char* protein_id) {
         res = curl_easy_perform(curl_handle);
        
         if(res != CURLE_OK) {
-            fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+            fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res)); // 17/10 every time i get this error?? 
+                                                                                          // ENSEMBLE WTF I changed nothing and now worls? gotta keep looking
             return NULL;
         }
 
@@ -129,6 +175,7 @@ char* fetchProteinSequence(const char* protein_id) {
 // index functions:   //
 ////////////////////////
 
+// retrives index of Aa of a codon
 int getAminoAcidIndex(char* codon) {
     for (int i = 0; i < MAX_CODONS; i++) { 
 
@@ -145,7 +192,7 @@ int getAminoAcidIndex(char* codon) {
             // this index is calculated based on the position of the amino acid character in the alphabet,
             // where 'A' is 0, 'B' is 1, ..., 'Z' is 25.
 
-            // I think there is a bug here? specially with TTT. 
+            // i think there is a bug here? specially with TTT. 
 
             // FIXED... there was an issue with how the table and the stops were ordered!! 
             
@@ -158,44 +205,72 @@ int getAminoAcidIndex(char* codon) {
                // at the countCodons functions the "N" are ignored
 }
 
+// converts codon to nt indices, for slicing :p 
+void getCodonIndices(const char *codon, int *i, int *j, int *k) {
+    char nucleotide_map[256] = {0};
+    nucleotide_map['A'] = 0;
+    nucleotide_map['C'] = 1;
+    nucleotide_map['G'] = 2;
+    nucleotide_map['T'] = 3;
+
+    *i = nucleotide_map[(unsigned char)codon[0]];
+    *j = nucleotide_map[(unsigned char)codon[1]];
+    *k = nucleotide_map[(unsigned char)codon[2]];
+}
+
 ////////////////////////
 // numeric functions: //
 ////////////////////////
 
-
+// starts counts of codons for each sequence
 void initializeCodonCounts(SequenceCodonCounts *seq) {
     for (int i = 0; i < MAX_CODONS; i++) { // start all of the values at 0, maximum should be the length of the sequence of codons
         strcpy(seq->counts[i].codon, codons[i]);
         seq->counts[i].count = 0; // start count at 0
         seq->counts[i].cu = 0.0; // start CU at 0 :P 
         // maybe here too we should start RSCU at 0?
+        seq->counts[i].rscu = 0.0; // yes? 
+        
     }
-    seq->sequence[0] = '\0'; // Initialize sequence to empty string
+    seq->sequence[0] = '\0'; // initialize sequence to empty string
 
 }
-
-void countCodons(char *sequence, SequenceCodonCounts *seq) {
-   int len = strlen(sequence);
-   // int completeCodonLength = len - (len % CODON_LENGTH); // Ensure only complete codons are processed
+// counts codons for each sequence
+void countCodons(char *sequence, SequenceCodonCounts *seq, bool calculate_minmax) {
+    int len = strlen(sequence);
 
     for (int i = 0; i <= len - CODON_LENGTH; i += CODON_LENGTH) {
         char codon[CODON_LENGTH + 1] = {0};
         strncpy(codon, &sequence[i], CODON_LENGTH);
 
-        // check if the codon contains 'N'
+        // check for 'N' in the codon
         if (strchr(codon, 'N') != NULL) {
-            continue; // skip this codon if it contains 'N' <- maybe it will be usefull to keep track of this?
+            continue;
         }
 
         for (int j = 0; j < MAX_CODONS; j++) {
             if (strcmp(seq->counts[j].codon, codon) == 0) {
                 seq->counts[j].count++;
+
+                if (calculate_minmax) {
+                    int idx_i, idx_j, idx_k;
+                    getCodonIndices(codon, &idx_i, &idx_j, &idx_k);
+                    if (idx_i >= 0 && idx_j >= 0 && idx_k >= 0) {
+                        CodonUsageStats stats = codon_usage_stats[idx_i][idx_j][idx_k];
+                        seq->counts[j].usage = stats.usage;
+                        seq->counts[j].max = stats.max;
+                        seq->counts[j].min = stats.min;
+                        seq->counts[j].ave = stats.ave;
+                        seq->counts[j].amino_acid_index = stats.amino_acid_index;
+                    }
+                }
+
                 break;
             }
         }
     }
 }
-
+// calculates CU for each sequence
 void calculateCU(SequenceCodonCounts *seq) {
     int amino_totals[26] = {0}; // array to store total counts for each amino acid
 
@@ -213,7 +288,7 @@ void calculateCU(SequenceCodonCounts *seq) {
         }
     }
 }
-
+// calculates RSCU for each sequence
 void calculateRSCU(SequenceCodonCounts *seq) {
     int amino_totals[26] = {0}; // 26 letters in the alphabet, assuming one amino acid per letter (with stops)
     int synonymous_counts[MAX_CODONS] = {0}; // array to store counts of synonymous codons
@@ -237,9 +312,123 @@ void calculateRSCU(SequenceCodonCounts *seq) {
 }
 
 ////////////////////////
+// MinMax functions:  //
+////////////////////////
+
+// reads codon usage data from a file
+void readCodonUsageData(const char *filename) {
+    FILE *infile = fopen(filename, "r");
+    if (!infile) {
+        fprintf(stderr, "Error opening codon usage file: %s\n", filename);
+        exit(1);
+    }
+
+    int i, j, k, amino_index;
+    float usage, max, min, ave;
+    char line[MAX_LINE_LENGTH];
+
+    while (fgets(line, sizeof(line), infile)) {
+        if (sscanf(line, "%d %d %d %f %f %f %f %d", &i, &j, &k, &usage, &max, &min, &ave, &amino_index) == 8) {
+            codon_usage_stats[i][j][k].usage = usage;
+            codon_usage_stats[i][j][k].max = max;
+            codon_usage_stats[i][j][k].min = min;
+            codon_usage_stats[i][j][k].ave = ave;
+            codon_usage_stats[i][j][k].amino_acid_index = amino_index;
+        }
+    }
+
+    fclose(infile);
+}
+
+// calculates minmax
+void calculateMinMax(SequenceCodonCounts *seq, int window_size, const char *output_filename) {
+    FILE *minmax_output = fopen(output_filename, "w");
+    if (!minmax_output) {
+        fprintf(stderr, "Error opening minmax output file: %s\n", output_filename);
+        exit(1);
+    }
+
+    fprintf(minmax_output, "Position Codon AminoAcid Usage Max Min Ave MinMax%%\n");
+
+    int len = strlen(seq->sequence);
+    int num_codons = len / CODON_LENGTH;
+
+    for (int j = 0; j <= num_codons - window_size; j++) {
+        float sumusage = 0.0, summax = 0.0, summin = 0.0, sumave = 0.0;
+        int valid_codons = 0;
+
+        for (int k = 0; k < window_size; k++) {
+            int idx = j + k;
+            char codon[CODON_LENGTH + 1];
+            strncpy(codon, &seq->sequence[idx * CODON_LENGTH], CODON_LENGTH);
+            codon[CODON_LENGTH] = '\0';
+
+            if (strchr(codon, 'N') != NULL) {
+                continue;
+            }
+
+            int idx_i, idx_j, idx_k;
+            getCodonIndices(codon, &idx_i, &idx_j, &idx_k);
+            if (idx_i >= 0 && idx_j >= 0 && idx_k >= 0) {
+                CodonUsageStats stats = codon_usage_stats[idx_i][idx_j][idx_k];
+                if (stats.amino_acid_index < 1000) {
+                    sumusage += stats.usage;
+                    summax += stats.max;
+                    summin += stats.min;
+                    sumave += stats.ave;
+                    valid_codons++;
+                }
+            }
+        }
+
+        if (valid_codons == 0) {
+            continue;
+        }
+
+        sumusage /= valid_codons;
+        summax /= valid_codons;
+        summin /= valid_codons;
+        sumave /= valid_codons;
+
+        float minmax_percent = 0.0;
+        if (sumusage > sumave && (summax - sumave) != 0) {
+            minmax_percent = (sumusage - sumave) / (summax - sumave) * 100.0;
+        } else if (sumusage < sumave && (sumave - summin) != 0) {
+            minmax_percent = - (sumave - sumusage) / (sumave - summin) * 100.0;
+        }
+
+        // get codon and amino acid for current position
+        char codon_out[CODON_LENGTH + 1];
+        strncpy(codon_out, &seq->sequence[j * CODON_LENGTH], CODON_LENGTH);
+        codon_out[CODON_LENGTH] = '\0';
+
+        int amino_index = getAminoAcidIndex(codon_out);
+        char amino_name[4] = "Xaa";  // default unknown amino acid // this could be changed
+        if (amino_index >= 0 && amino_index < MAX_CODONS) {
+            if (amino_acids[amino_index] == '*') {
+                strcpy(amino_name, "*aa");
+            } else if (amino_index >= 0 && amino_index < 26) { // assuming 26 for standard amino acids
+                amino_name[0] = amino_acids[amino_index];
+                amino_name[1] = 'a';
+                amino_name[2] = 'a';
+                amino_name[3] = '\0';
+            }
+        }
+
+        fprintf(minmax_output, "%d %s %s %.2f %.2f %.2f %.2f %.2f\n", j + 1, codon_out, amino_name,
+                sumusage, summax, summin, sumave, minmax_percent);
+    }
+
+    fclose(minmax_output);
+}
+
+
+////////////////////////
 // CSV functions:     //
 ////////////////////////
 
+
+// write the header for the CSV
 void writeCsvHeader(FILE *file, bool includeCU, bool includeRSCU) {
     fprintf(file, "ID");
     for (int i = 0; i < MAX_CODONS; i++) {
@@ -254,6 +443,7 @@ void writeCsvHeader(FILE *file, bool includeCU, bool includeRSCU) {
     fprintf(file, "\n");
 }
 
+// write the rows for the CSV
 void writeCsvRow(FILE *file, SequenceCodonCounts *seq, bool includeCU, bool includeRSCU) {
     fprintf(file, "%s", seq->id);
     for (int i = 0; i < MAX_CODONS; i++) {
@@ -273,7 +463,8 @@ void writeCsvRow(FILE *file, SequenceCodonCounts *seq, bool includeCU, bool incl
 // slicer functions:  //
 ////////////////////////
 
-void parseSliceFile(char *filename, SliceInstruction **instructions, int *count) {
+// parse the file with the instructions for slicing the sequence
+void parseSliceFile(const char *filename, SliceInstruction **instructions, int *count) {
     FILE *file = fopen(filename, "r");
     if (!file) {
         fprintf(stderr, "Error opening slice file: %s\n", filename);
@@ -282,60 +473,97 @@ void parseSliceFile(char *filename, SliceInstruction **instructions, int *count)
 
     char line[MAX_LINE_LENGTH];
     int instr_count = 0;
-    SliceInstruction *temp_instructions = malloc(100 * sizeof(SliceInstruction));
+    int capacity = 100;
+    SliceInstruction *temp_instructions = malloc(capacity * sizeof(SliceInstruction));
+    if (!temp_instructions) {
+        fprintf(stderr, "Memory allocation failed\n");
+        exit(1);
+    }
 
     while (fgets(line, sizeof(line), file)) {
-        line[strcspn(line, "\r\n")] = '\0';  // Remove newline
+        if (instr_count >= capacity) {
+            capacity *= 2;
+            temp_instructions = realloc(temp_instructions, capacity * sizeof(SliceInstruction));
+            if (!temp_instructions) {
+                fprintf(stderr, "Memory reallocation failed\n");
+                exit(1);
+            }
+        }
 
-        // Split the line by commas (ID, domain_name, range)
+        // remove newline characters
+        line[strcspn(line, "\r\n")] = '\0';
+
+        // split the line by commas (ID, domain_name, range)
         char *token = strtok(line, ",");
-        strcpy(temp_instructions[instr_count].transcript_id, token);
+        if (token) strcpy(temp_instructions[instr_count].transcript_id, token);
 
         token = strtok(NULL, ",");
-        strcpy(temp_instructions[instr_count].domain_name, token);
+        if (token) strcpy(temp_instructions[instr_count].domain_name, token);
 
         token = strtok(NULL, ":");
-        temp_instructions[instr_count].start = atoi(token) - 1;  // Convert start to zero-index
+        if (token) temp_instructions[instr_count].start = atoi(token) - 1;  // zero-index
 
         token = strtok(NULL, ":");
-        temp_instructions[instr_count].end = atoi(token) - 1;    // Convert end to zero-index
+        if (token) temp_instructions[instr_count].end = atoi(token) - 1;    // zero-index
+
+        // debugging: Print parsed instruction
+        printf("Parsed Instruction %d: Transcript_ID=%s, Domain_Name=%s, Start=%d, End=%d\n",
+               instr_count, temp_instructions[instr_count].transcript_id,
+               temp_instructions[instr_count].domain_name,
+               temp_instructions[instr_count].start, temp_instructions[instr_count].end);
 
         instr_count++;
     }
 
+    fclose(file);
     *instructions = temp_instructions;
     *count = instr_count;
-
-    fclose(file);
 }
+
 
 
 // be aware that you need to select the # of codon (that is also the corresponding position of the Aa in the sequence!)
 // a seuqnece that has 30 nt, has 10 codons, and so 10 Aa. If you use "30" for the last Aa, it will raise an out of bounds error
 // maybe add a flag for this?
 
-void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructions, int instr_count, FILE *output, bool calculate_cu, bool calculate_rscu) {
-    for (int i = 0; i < instr_count; i++) {
+// this part requeires some serious debuging 
+
+void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructions, int instr_count, FILE *output, bool calculate_cu, bool calculate_rscu, bool silent, bool calculate_minmax, int window_size, const char *output_filename) {    for (int i = 0; i < instr_count; i++) {
         if (strcmp(seq->id, instructions[i].transcript_id) == 0) {
-            printf("Slicing: %s from %d to %d\n", instructions[i].transcript_id, instructions[i].start  +1, instructions[i].end  +1);
+
+            printf("Matched Slice Instruction %d: Transcript_ID=%s\n", i, instructions[i].transcript_id);
 
             int start_pos = instructions[i].start * CODON_LENGTH;
-            int end_pos = (instructions[i].end + 1) * CODON_LENGTH;
+            int end_pos = instructions[i].end * CODON_LENGTH;
 
-            int seq_length = strlen(seq->sequence);
+            printf("Slicing: %s from %d to %d, positions %d to %d\n", instructions[i].transcript_id, instructions[i].start + 1, instructions[i].end + 1, start_pos, end_pos);
 
-            if (start_pos >= seq_length || end_pos > seq_length) {
-                fprintf(stderr, "Slice out of bounds for %s: %d-%d\n", seq->id, instructions[i].start +1, instructions[i].end +1);
+            // validate slice bounds
+            if (start_pos < 0 || end_pos > (int)strlen(seq->sequence) || start_pos >= end_pos) {
+                fprintf(stderr, "Invalid slicing bounds for %s: start=%d, end=%d\n", seq->id, instructions[i].start + 1, instructions[i].end + 1);
                 continue;
             }
 
             int slice_length = end_pos - start_pos;
-            char sliced_sequence[slice_length + 1];
+            if (slice_length <= 0) {
+                fprintf(stderr, "Invalid slice length for %s\n", instructions[i].domain_name);
+                continue;
+            }
+
+            // allocate memory for sliced_sequence dynamically
+            char *sliced_sequence = malloc(slice_length + 1);
+            if (!sliced_sequence) {
+                fprintf(stderr, "Memory allocation failed for sliced_sequence\n");
+                continue;
+            }
 
             strncpy(sliced_sequence, seq->sequence + start_pos, slice_length);
             sliced_sequence[slice_length] = '\0';
+            printf("Sliced sequence: %s\n", sliced_sequence);
+            printf("\n");
 
-            // Process the sliced sequence
+
+            // process the sliced sequence
             SequenceCodonCounts slicedSeq;
             initializeCodonCounts(&slicedSeq);
             strncpy(slicedSeq.id, instructions[i].domain_name, sizeof(slicedSeq.id) - 1);
@@ -343,7 +571,7 @@ void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructi
             strncpy(slicedSeq.sequence, sliced_sequence, sizeof(slicedSeq.sequence) - 1);
             slicedSeq.sequence[sizeof(slicedSeq.sequence) - 1] = '\0';
 
-            countCodons(sliced_sequence, &slicedSeq);
+            countCodons(sliced_sequence, &slicedSeq, false); // last false is for the minmax 
 
             if (calculate_cu) {
                 calculateCU(&slicedSeq);
@@ -353,9 +581,115 @@ void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructi
             }
 
             writeCsvRow(output, &slicedSeq, calculate_cu, calculate_rscu);
+
+            // free the allocated memory for sliced_sequence
+            free(sliced_sequence);
+            } else {
+                printf("No match for Slice Instruction %d: Transcript_ID=%s with Sequence ID=%s\nRemember that ID's should match between files!!!!\n", i, instructions[i].transcript_id, seq->id);
+        
         }
     }
 }
+
+////////////////////////
+//   proccesing bulk  //
+////////////////////////
+
+void processSequence(const char *sequence_data, const char *sequence_id, FILE *output, bool calculate_cu, bool calculate_rscu, bool calculate_minmax, int window_size, const char *output_filename, bool silent, bool slice_sequence, const char *slice_filename) {
+    // Initialize sequence structure
+    SequenceCodonCounts currentSequence;
+    initializeCodonCounts(&currentSequence);
+    strncpy(currentSequence.id, sequence_id, sizeof(currentSequence.id) - 1);
+    currentSequence.id[sizeof(currentSequence.id) - 1] = '\0';
+
+    // Copy the sequence data
+    strncpy(currentSequence.sequence, sequence_data, sizeof(currentSequence.sequence) - 1);
+    currentSequence.sequence[sizeof(currentSequence.sequence) - 1] = '\0';
+
+    // Count codons and perform calculations
+    countCodons(currentSequence.sequence, &currentSequence, calculate_minmax);
+
+    if (calculate_cu) {
+        calculateCU(&currentSequence);
+    }
+    if (calculate_rscu) {
+        calculateRSCU(&currentSequence);
+    }
+
+    // Write to CSV
+    if (!silent) {
+        if (calculate_cu || calculate_rscu) {
+            writeCsvRow(stdout, &currentSequence, calculate_cu, calculate_rscu);
+            printf("\n");
+        }   
+        
+    }
+    
+    if (calculate_cu || calculate_rscu) {
+       // writeCsvHeader(output, calculate_cu, calculate_rscu);
+        writeCsvRow(output, &currentSequence, calculate_cu, calculate_rscu); // the thing with this is that you also don't get the codon count... ehhh do we want it??
+    }   
+
+    // Perform min-max calculations
+    if (calculate_minmax) {
+        char minmax_output_filename[1024];
+        //printf("Minmax output filename: %s\n", minmax_output_filename);
+
+        // HERE there are some issues with how the output file is named. 
+        // the output gets spaces and a binch of thins, it should be better handeled. 
+        // 
+        snprintf(minmax_output_filename, sizeof(minmax_output_filename), "%s_minmax.out", currentSequence.id);
+        calculateMinMax(&currentSequence, window_size, minmax_output_filename);
+    }
+
+    // Slicing functionality
+    if (slice_sequence) {
+        // Parse the slice file if not already parsed
+        static SliceInstruction *instructions = NULL;
+        static int slice_count = 0;
+        static bool slices_parsed = false;
+        if (!slices_parsed) {
+            parseSliceFile(slice_filename, &instructions, &slice_count);
+            slices_parsed = true;
+        }
+
+        // Process each sliced sequence
+        sliceAndWriteSequence(&currentSequence, instructions, slice_count, output, calculate_cu, calculate_rscu, silent, calculate_minmax, window_size, output_filename);
+    }
+}
+
+
+// bool isEnsemblServerOnline() {
+//     CURL *curl;
+//     CURLcode res;
+//     long response_code = 0;
+//     bool server_online = false;
+
+//     curl = curl_easy_init();
+//     if(curl) {
+//         // Set the URL to the Ensembl REST API base URL
+//         curl_easy_setopt(curl, CURLOPT_URL, "https://rest.ensembl.org/");
+//         // Perform a HEAD request
+//         curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
+//         // Set a timeout for the request
+//         curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
+
+//         res = curl_easy_perform(curl);
+
+//         if(res == CURLE_OK) {
+//             // Check the HTTP response code
+//             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response_code);
+//             if(response_code == 200) {
+//                 server_online = true;
+//             }
+//         } else {
+//             fprintf(stderr, "Failed to connect to Ensembl server: %s\n", curl_easy_strerror(res));
+//         }
+
+//         curl_easy_cleanup(curl);
+//     }
+//     return server_online;
+// }
 
 
 ////////////////////////
@@ -369,12 +703,20 @@ int main(int argc, char *argv[]) {
     bool fetch_sequence = false;
     bool fetch_from_file = false; // fetch from a .txt
     bool slice_sequence = false;
+    bool calculate_minmax = false;
 
+    int window_size = 18;
+    int slice_count = 0;
+
+    char *codon_usage_filename = NULL;
     char *slice_filename = NULL;  // Path to slice file
     char *input_filename = NULL;
     char *output_filename = NULL;
     char *protein_id = NULL;
     char *fetchfile = NULL; // fetch from a .txt
+
+    // variable declarations for slicing
+    SliceInstruction *instructions = NULL;
 
 
     for (int i = 1; i < argc; i++) {
@@ -385,28 +727,45 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "-rscu") == 0) {
             calculate_rscu = true;
 
-        } else if (strcmp(argv[i], "-silent") == 0) {
-            silent = true;  // silent mode
-
-        } else if (strcmp(argv[i], "-fetch") == 0 && i + 1 < argc) {
-            fetch_sequence = true;
-            protein_id = argv[++i];
-            output_filename = argv[++i];  // make sure to capture the output filename from the fetch
-
-        } else if (strcmp(argv[i], "-fetchfile") == 0 && i + 1 < argc) {
-            fetch_from_file = true;
-            fetchfile = argv[++i];
-            output_filename = argv[++i];
-
         } else if (strcmp(argv[i], "-all") == 0) {
             calculate_cu = true;
             calculate_rscu = true;
+        } else if (strcmp(argv[i], "-silent") == 0) {
+            silent = true;  // silent mode
 
-    
-        } else if (strcmp(argv[i], "-slice_domains") == 0 && i + 1 < argc) {
-            slice_sequence = true;
-            slice_filename = argv[++i];  // Get the path to the slice file
-    
+        } else if (strcmp(argv[i], "-fetch") == 0) {
+            if (i + 2 < argc) {
+                fetch_sequence = true;
+                protein_id = argv[i + 1];
+                output_filename = argv[i + 2];
+                i += 2;  } // adjust 'i' after consuming arguments 
+
+        } else if (strcmp(argv[i], "-fetchfile") == 0) {
+            if (i + 2 < argc) {
+                fetch_from_file = true;
+                fetchfile = argv[i + 1];
+                output_filename = argv[i + 2];
+                i += 2; }
+
+        } else if (strcmp(argv[i], "-slice_domains") == 0) {
+            if (i + 1 < argc) {
+                slice_sequence = true;
+                slice_filename = argv[i + 1];
+                i += 1; } // get the path to the slice file
+
+        } else if (strcmp(argv[i], "-minmax") == 0) { // I should make a change here
+            if (i + 1 < argc) {                       //  there is no need for an output name file, it does not use it
+                calculate_minmax = true;              // but now if you run it without it it throws an error!
+                codon_usage_filename = argv[i + 1];   // ./coconut_fit -minmax Usage-num3.man  example_1610.fasta a.out works fine
+                i += 1;                               // out are named after the files inside the multifasta
+                if (i + 1 < argc && isdigit(argv[i + 1][0])) { // but i also get an empty a.out
+                    window_size = atoi(argv[i + 1]);
+                    i += 1;
+                }
+            } else {
+                fprintf(stderr, "Error: Codon usage file must be specified with -minmax flag.\n");
+                return 1;
+            }
 
         } else if (strcmp(argv[i], "-help") == 0) {
 
@@ -416,10 +775,11 @@ int main(int argc, char *argv[]) {
             printf("  -rscu\tCalculate Relative Synonymous Codon Usage (RSCU)\n");
             printf("  -all\tCalculate CU and RSCU\n");
             printf("  -silent\tHide outputs from the console\n");
-            printf("  -fetch\tFetch sequence from Ensembl using transcript ID (ENST) (no <input.fasta>)\n");
-            printf("  -fetchfile\tFetch multiple sequences from a text file (ENSTs)\n");
-            printf("  -slice_domains\tSlice fasta into domains using a csv style file\n");
-
+            printf("  -fetch\tFetch sequence from Ensembl using transcript ID (ENST) (requires protein_id and output_filename)\n");
+            printf("  -fetchfile\tFetch multiple sequences from a text file (requires fetchfile and output_filename)\n");
+            printf("  -slice_domains\tSlice fasta into domains using a CSV-style file (requires slice_filename)\n");
+            printf("  -minmax <codon_usage_file> [window_size]\tCalculate min-max percentage over specified window size (default 18).\n");
+            printf("\n");
             printf("\n");
             printf("\n");
             printf("Developed by Juan Mac Donagh at JGU and UNQ\n");
@@ -434,40 +794,68 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    ///////////////////////////////////////////
+    // errors for arguments or files missing //
+    ///////////////////////////////////////////
+
     if ((!input_filename || !output_filename) && !fetch_sequence && !fetch_from_file) {
-        fprintf(stderr, "Usage: %s [-cu] [-rscu] [-all] [-silent] [-fetchfile] [-fetch_list] [-slice_domains] [-help] <slice.csv> <input.fasta> <output.csv>\n", argv[0]);
+        fprintf(stderr, "Unkwon command:\n Usage: %s [-cu] [-rscu] [-all] [-silent] [-fetch] [-fetchfile] [-slice_domains] [-minmax <codon_usage_file> [window_size]] [-help] <slice.csv> <input.fasta> <output.csv>\n", argv[0]);
         return 1;
     }
-
     // check for output file in both fetch and normal input cases
+
     if (!output_filename) {
         fprintf(stderr, "Output filename is required.\n");
         return 1;
     }
-
     FILE *output = fopen(output_filename, "w");
     if (!output) {
         if (!silent) {
-            fprintf(stderr, "Error opening input file: %s\n", input_filename);
+            fprintf(stderr, "Error opening output file: %s\n", output_filename);
         }
         return 1;
     }
 
-    // write CSV header -> there is an issue here with the version of the ENST when doing a fetch i believe
-    writeCsvHeader(output, calculate_cu, calculate_rscu);
+    if (calculate_minmax) {
+        if (!codon_usage_filename) {
+            fprintf(stderr, "Error: Codon usage file must be specified with -minmax flag.\n");
+            fclose(output);
+            return 1;
+        }
+        printf("Codon usage data loaded successfully.\n");
+        readCodonUsageData(codon_usage_filename);
+    }
+
+    // write CSV header for CU and RSCU
+    if (calculate_cu || calculate_rscu) {
+        writeCsvHeader(output, calculate_cu, calculate_rscu);
+    }   
 
     char *sequence_data = NULL;
 
-    if (fetch_sequence) {
 
+
+
+    // args //
+
+
+
+    if (fetch_sequence) { // as of 17/10 i can't use the fetch option wtf did I broke NOW PLEASE 
+
+        // if (!isEnsemblServerOnline()) {
+        //     fprintf(stderr, "Ensembl server is not available. Please try again later.\n");
+        //     fclose(output);
+        //     return 1;
+        // }
+        // Fetch a single sequence
         if (!silent) {
             printf("Fetching sequence for protein ID: %s\n", protein_id);
         }
 
-        sequence_data = fetchProteinSequence(protein_id);
+        char *sequence_data = fetchProteinSequence(protein_id);
         if (!sequence_data) {
             fprintf(stderr, "Failed to fetch sequence for protein ID: %s\n", protein_id);
-            fclose(output);  // close the file before returning
+            fclose(output);
             return 1;
         }
 
@@ -475,158 +863,93 @@ int main(int argc, char *argv[]) {
             printf("Fetched Sequence:\n%s\n", sequence_data);
         }
 
-        // process the fetched sequence
-        SequenceCodonCounts currentSequence;
-        initializeCodonCounts(&currentSequence);
-        strncpy(currentSequence.id, protein_id, sizeof(currentSequence.id) - 1);
-        currentSequence.id[sizeof(currentSequence.id) - 1] = '\0';
-
-        countCodons(sequence_data, &currentSequence);
-
-        if (calculate_cu) {
-            calculateCU(&currentSequence);
-        }
-        if (calculate_rscu) {
-            calculateRSCU(&currentSequence);
-        }
-
-        // write fetched sequence to CSV file
-        if (!silent) {
-            writeCsvRow(stdout, &currentSequence, calculate_cu, calculate_rscu);  // Print to console
-        }
-        writeCsvRow(output, &currentSequence, calculate_cu, calculate_rscu);
-        
-        free(sequence_data);  // free the fetched sequence memory
-    
-
-
-    } else if (fetch_from_file) {  // NEW: fetch multiple sequences from file
-    FILE *file = fopen(fetchfile, "r");
-    if (!file) {
-        fprintf(stderr, "Error opening file: %s\n", fetchfile);
-        fclose(output);
-        return 1;
-    }
-
-    char enst_id[MAX_LINE_LENGTH];
-    while (fgets(enst_id, sizeof(enst_id), file)) {
-        enst_id[strcspn(enst_id, "\r\n")] = '\0';  // Remove newline characters
-
-        char *sequence_data = fetchProteinSequence(enst_id);
-
-        printf("Fetching sequence for protein ID: %s\n", enst_id);
-        if (!silent) {
-            printf("Fetched Sequence:\n%s\n", sequence_data);
-        }
-        if (!sequence_data) {
-            if (!silent) {
-                fprintf(stderr, "Failed to fetch sequence for ENST ID: %s. Skipping...\n", enst_id);
-            }
-            continue;  // Skip this ENST and proceed to the next
-        }
-
-        
-        SequenceCodonCounts currentSequence;
-        initializeCodonCounts(&currentSequence);
-        strncpy(currentSequence.id, enst_id, sizeof(currentSequence.id) - 1);
-        countCodons(sequence_data, &currentSequence);
-
-        if (calculate_cu) {
-            calculateCU(&currentSequence);
-        }
-        if (calculate_rscu) {
-            calculateRSCU(&currentSequence);
-        }
-        if (!silent) {
-        writeCsvRow(stdout, &currentSequence, calculate_cu, calculate_rscu);
-        }
-        writeCsvRow(output, &currentSequence, calculate_cu, calculate_rscu);
+        // Process the fetched sequence
+        processSequence(sequence_data, protein_id, output, calculate_cu, calculate_rscu, calculate_minmax, window_size, output_filename, silent, slice_sequence, slice_filename);
 
         free(sequence_data);
-    }
-    fclose(file);
 
+    } else if (fetch_from_file) {
+        // Fetch multiple sequences from a file
+        FILE *file = fopen(fetchfile, "r");
+        if (!file) {
+            fprintf(stderr, "Error opening file: %s\n", fetchfile);
+            fclose(output);
+            return 1;
+        }
 
-    
+        char enst_id[MAX_LINE_LENGTH];
+        while (fgets(enst_id, sizeof(enst_id), file)) {
+            enst_id[strcspn(enst_id, "\r\n")] = '\0';  // Remove newline characters
+
+            if (!silent) {
+                printf("Fetching sequence for protein ID: %s\n", enst_id);
+            }
+
+            char *sequence_data = fetchProteinSequence(enst_id);
+            if (!sequence_data) {
+                if (!silent) {
+                    fprintf(stderr, "Failed to fetch sequence for ENST ID: %s. Skipping...\n", enst_id);
+                }
+                continue;
+            }
+
+            if (!silent) {
+                printf("Fetched Sequence:\n%s\n", sequence_data);
+            }
+
+            // Process the fetched sequence
+            processSequence(sequence_data, enst_id, output, calculate_cu, calculate_rscu, calculate_minmax, window_size, output_filename, silent, slice_sequence, slice_filename);
+
+            free(sequence_data);
+        }
+        fclose(file);
+
     } else if (input_filename) {
+        // Read sequences from a FASTA file
         FILE *input = fopen(input_filename, "r");
         if (!input) {
             if (!silent) {
                 fprintf(stderr, "Failed to open input file: %s\n", input_filename);
-
             }
-            fclose(output);  // close the file before returning
+            fclose(output);
             return 1;
         }
 
-        // process the FASTA file (input, not fetched)
         SequenceCodonCounts currentSequence;
         bool active = false;
         char line[MAX_LINE_LENGTH];
-        
-        while (fgets(line, sizeof(line), input)) {
-            line[strcspn(line, "\r\n")] = '\0'; // remove newline
 
-            if (line[0] == '>') { // header line
+        while (fgets(line, sizeof(line), input)) {
+            line[strcspn(line, "\r\n")] = '\0';  // Remove newline
+
+            if (line[0] == '>') {  // Header line
                 if (active) {
-                    if (calculate_cu) {
-                        calculateCU(&currentSequence);
-                    }
-                    if (calculate_rscu) {
-                        calculateRSCU(&currentSequence);
-                    }
-                    // write processed sequence to CSV file
-                    if (!silent) {
-                        fprintf(stderr, "Procesing protein ID: %s:\n", currentSequence.id);
-                        writeCsvRow(stdout, &currentSequence, calculate_cu, calculate_rscu);  // Print to console
-                        fprintf(stderr, "\n");
-                    }
-                    writeCsvRow(output, &currentSequence, calculate_cu, calculate_rscu);  // write to CSV file
+                    // Process the previous sequence
+                    processSequence(currentSequence.sequence, currentSequence.id, output, calculate_cu, calculate_rscu, calculate_minmax, window_size, output_filename, silent, slice_sequence, slice_filename);
                 }
-                strncpy(currentSequence.id, line + 1, sizeof(currentSequence.id) - 1); // copy ID, trimming '>'
-                currentSequence.id[strcspn(currentSequence.id, "\n")] = '\0'; // remove newline
+                // Start a new sequence
+                strncpy(currentSequence.id, line + 1, sizeof(currentSequence.id) - 1);
+                currentSequence.id[sizeof(currentSequence.id) - 1] = '\0';
                 initializeCodonCounts(&currentSequence);
                 active = true;
             } else if (active && strlen(line) > 0) {
+                // Accumulate sequence data
                 for (int i = 0; line[i]; i++) {
-                    line[i] = toupper(line[i]); // convert to uppercase
+                    line[i] = toupper(line[i]);  // Convert to uppercase
                 }
-
                 strcat(currentSequence.sequence, line);
-                countCodons(line, &currentSequence);
             }
         }
-        
 
-        if (active) { // final sequence processing
-            if (slice_sequence) {
-                SliceInstruction *instructions;
-                int slice_count;
-                parseSliceFile(slice_filename, &instructions, &slice_count);
-                
-                sliceAndWriteSequence(&currentSequence, instructions, slice_count, output, calculate_cu, calculate_rscu);
-                free(instructions);
-            } else {
-                if (calculate_cu) {
-                    calculateCU(&currentSequence);
-                }
-                if (calculate_rscu) {
-                    calculateRSCU(&currentSequence);
-                }
-                if (!silent) {
-                    fprintf(stderr, "Processing protein ID: %s:\n", currentSequence.id);
-                    writeCsvRow(stdout, &currentSequence, calculate_cu, calculate_rscu);
-                    fprintf(stderr, "\n");
-                }
-                writeCsvRow(output, &currentSequence, calculate_cu, calculate_rscu);
-            }
-        }   
+        // Process the last sequence
+        if (active) {
+            processSequence(currentSequence.sequence, currentSequence.id, output, calculate_cu, calculate_rscu, calculate_minmax, window_size, output_filename, silent, slice_sequence, slice_filename);
+        }
 
         fclose(input);
     }
 
-    fclose(output);  // close the output file after writing
-
+    fclose(output);  // Close the output file
     return 0;
 }
 
