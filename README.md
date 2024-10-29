@@ -23,11 +23,8 @@ After that, just run the following command:
 
 
 ```bash
-
 git clone https://github.com/Juanmacdonagh17/coconut_repo
-
 cd coconut_repo
-
 gcc -o coconut coconut.c -I/home/path/to/miniconda3/include -L/home/path/to/miniconda3/lib -lcurl
 
 ```
