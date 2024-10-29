@@ -13,6 +13,7 @@ Be aware of bugs, especially tyranids.***
 
 Coconut is an easy-to-run codon analysis suite. It's fully coded on C, providing functions for analyzing FASTA or multi FASTA files or fetching transcript sequences from Ensemlb, and calculating parametires like Codon Usage, Relative Synonimus Codon Usage and %MinMax.  
 
+---
 ### Instalation 
 
 The software is easily installed via [GCC](https://gcc.gnu.org/). To install, you need to have the curl.h library.
@@ -45,7 +46,7 @@ After that, you can run Coconut via docker like this:
 ```bash
 docker run -v /usr/src/coconut_repo ARGUMENTS
 ```
-
+---
 
 ### Running Coconut 
 
@@ -86,7 +87,7 @@ Using the -help flag will provide a list of all available commands, but here is 
 | Optional flags (no ATG, no STOP, etc)       | ❌        |
 | MobiDB integration for disorder regions     | ❌        |
 
-
+---
 
 
 
