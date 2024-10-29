@@ -24,7 +24,7 @@ After that, just run the following command:
 
 ```bash
 
-git clone https://github.com/Juanmacdonagh17/coconut_repo.git
+git clone https://github.com/Juanmacdonagh17/coconut_repo
 
 cd coconut_repo
 
@@ -38,7 +38,7 @@ Coconut also counts with a Docker implementation:
 Be sure to have [Docker](https://www.docker.com/) installed on your computer, then follow this instructions:
 
 ```bash
-git clone https://github.com/Juanmacdonagh17/coconut_repo.git
+git clone https://github.com/Juanmacdonagh17/coconut_repo
 cd coconut_repo
 docker build -t coconut-app .
 ```
