@@ -400,21 +400,21 @@ void calculateMinMax(SequenceCodonCounts *seq, int window_size, const char *outp
         strncpy(codon_out, &seq->sequence[j * CODON_LENGTH], CODON_LENGTH);
         codon_out[CODON_LENGTH] = '\0';
 
-        int amino_index = getAminoAcidIndex(codon_out);
+        int amino_index = getAminoAcidIndex(codon_out); // INDEX FUNCTION IS NOT APPENDING THE CORRECT CODON!!! 
         char amino_name[4] = "Xaa";  // default unknown amino acid, maybe I can play a bit around here
         if (amino_index >= 0 && amino_index < MAX_CODONS) {
             if (amino_acids[amino_index] == '*') {
                 strcpy(amino_name, "*aa");
             } else if (amino_index >= 0 && amino_index < 26) { // assuming 26 standard amino acids
                 amino_name[0] = amino_acids[amino_index];
-                amino_name[1] = 'a';
-                amino_name[2] = 'a';
-                amino_name[3] = '\0';
+                // amino_name[1] = 'a';
+                // amino_name[2] = 'a';
+                amino_name[1] = '\0'; //3
             }
         }
 
         // include Sequence ID in the output
-        fprintf(minmax_output, "%s %d %s %s %.2f %.2f %.2f %.2f %.2f\n",
+        fprintf(minmax_output, "%s,%d,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f\n",
                 seq->id, j + 1, codon_out, amino_name,
                 sumusage, summax, summin, sumave, minmax_percent);
     }
@@ -868,7 +868,7 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         // Write header
-        fprintf(minmax_output, "SequenceID Position Codon AminoAcid Usage Max Min Ave MinMax%%\n");
+        fprintf(minmax_output, "ID,position,codon,aminoacid,usage,max,min,ave,minmax\n");
         fclose(minmax_output);
     }   
  
