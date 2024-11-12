@@ -22,7 +22,7 @@ We provide a shell script for quick installation:
 ```bash
 git clone https://github.com/Juanmacdonagh17/coconut_repo
 cd coconut_repo
-chmod +x install.sh
+chmod +x coco_install.sh
 ./coco_install.sh
 ```
 The script checks for GCC, wget and make, and if they are installed, installs the curl library and compiles coconut.
