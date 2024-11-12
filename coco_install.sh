@@ -1,7 +1,7 @@
 #!/bin/bash
 
 spinner() {
-    # spinner "Message" command_to_run [args...]
+    # spinner 
     local msg="$1"
     shift
     local cmd=("$@")
@@ -17,7 +17,7 @@ spinner() {
 
     while kill -0 "$pid" 2>/dev/null; do
         temp=${spinstr#?}
-        printf " %c  " "$spinstr"
+        printf "   %c  " "$spinstr"
         spinstr=$temp${spinstr%"$temp"}
         sleep $delay
         printf "\b\b\b\b\b\b"
@@ -53,8 +53,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COCONUT_SOURCE="$SCRIPT_DIR/coconut.c"
 
 # install dependencies locally
-mkdir -p "$HOME/local"
-cd "$HOME/local" || exit
+mkdir -p "$HOME/local" # maybe make this inside the repo ? so no to make an extra local folder? idk
+cd "$HOME/local" || exit 
 
 # download and install libcurl
 echo 'downloading and installing libcurl \n'
@@ -62,24 +62,22 @@ echo 'downloading and installing libcurl \n'
 # downloading curl
 spinner "downloading curl" wget https://curl.se/download/curl-7.88.1.tar.gz
 
-# Extracting curl
+# extracting curl
 spinner "extracting curl" tar -xzf curl-7.88.1.tar.gz
 
 cd curl-7.88.1 || exit
 
-# Configuring curl
+# configuring curl
 spinner "configuring curl" ./configure --prefix="$HOME/local" > /dev/null 2>&1
 
-# Compiling curl
+# compiling curl
 spinner "compiling curl" make > /dev/null 2>&1
 
-# Installing curl
+# installing curl
 spinner "installing curl" make install > /dev/null 2>&1
 
-# Compile coconut
-echo 'compiling coconut'
-
-spinner "Compiling coconut" gcc -o coconut "$COCONUT_SOURCE" -I"$HOME/local/include" -L"$HOME/local/lib" -lcurl
+# compile coconut
+spinner "compiling coconut" gcc -o coconut "$COCONUT_SOURCE" -I"$HOME/local/include" -L"$HOME/local/lib" -lcurl
 
 echo 'installation complete :D'
 
