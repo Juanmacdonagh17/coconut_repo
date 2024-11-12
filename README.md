@@ -19,17 +19,16 @@ Coconut is an easy-to-run codon analysis suite. It's fully coded on C, providing
 The software is easily complied via [GCC](https://gcc.gnu.org/). To install, you need to have the curl.h library.
 We provide a shell script for quick installation:
 
+The script checks for GCC, wget and make and curl. If they are installed, it simply compiles coconut. If not, it offers to install miniconda and compiles coconut.
 ```bash
 git clone https://github.com/Juanmacdonagh17/coconut_repo
 cd coconut_repo
 chmod +x coco_install.sh
 ./coco_install.sh
 ```
-The script checks for GCC, wget and make, and if they are installed, installs the curl library and compiles coconut.
 
 If you prefer to install it by yourself, you can install [Miniconda3](https://docs.anaconda.com/miniconda/).
 After that, just run the following command:
-
 
 ```bash
 git clone https://github.com/Juanmacdonagh17/coconut_repo
@@ -38,7 +37,6 @@ gcc -o coconut coconut.c -I/home/path/to/miniconda3/include -L/home/path/to/mini
 
 ```
 Replace /path/to with the folder where Conda was installed.
-
 
 Coconut also counts with a Docker implementation:
 Be sure to have [Docker](https://www.docker.com/) installed on your computer, then follow this instructions:
