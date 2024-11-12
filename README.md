@@ -14,11 +14,20 @@ Be aware of bugs, especially tyranids.***
 Coconut is an easy-to-run codon analysis suite. It's fully coded on C, providing functions for analyzing FASTA or multi FASTA files or fetching transcript sequences from Ensemlb, and calculating parametires like Codon Usage, Relative Synonimus Codon Usage and %MinMax.  
 
 ---
-### Instalation 
+### Installation 
 
-The software is easily installed via [GCC](https://gcc.gnu.org/). To install, you need to have the curl.h library.
-The simplest, if you don't have it already, is installing [Miniconda3](https://docs.anaconda.com/miniconda/).
+The software is easily complied via [GCC](https://gcc.gnu.org/). To install, you need to have the curl.h library.
+We provide a shell script for quick installation:
 
+```bash
+git clone https://github.com/Juanmacdonagh17/coconut_repo
+cd coconut_repo
+chmod +x install.sh
+./coco_install.sh
+```
+The script checks for GCC, wget and make, and if they are installed, installs the curl library and compiles coconut.
+
+If you prefer to install it by yourself, you can install [Miniconda3](https://docs.anaconda.com/miniconda/).
 After that, just run the following command:
 
 
@@ -30,8 +39,8 @@ gcc -o coconut coconut.c -I/home/path/to/miniconda3/include -L/home/path/to/mini
 ```
 Replace /path/to with the folder where Conda was installed.
 
-Coconut also counts with a Docker implementation:
 
+Coconut also counts with a Docker implementation:
 Be sure to have [Docker](https://www.docker.com/) installed on your computer, then follow this instructions:
 
 ```bash
