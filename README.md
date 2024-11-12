@@ -48,7 +48,12 @@ docker build -t coconut-app .
 ```
 After that, you can run Coconut via docker like this:
 ```bash
-docker run -v /usr/src/coconut_repo ARGUMENTS
+docker run coconut-app -help
+```
+Mounting a volume:
+```bash
+docker run -v /home/user/coconut_output:/home/cocouser/output your_image_name -help
+
 ```
 ---
 
