@@ -27,7 +27,7 @@ chmod +x coco_install.sh
 ./coco_install.sh
 ```
 
-If you prefer to install it by yourself, you can install [Miniconda3](https://docs.anaconda.com/miniconda/).
+If you prefer to install it by yourself, you can install [Miniconda3](https://docs.anaconda.com/miniconda/) (or simply just install [curl](https://github.com/curl/curl), although you might need some extra dependencies).
 After that, just run the following command:
 
 ```bash
@@ -36,7 +36,7 @@ cd coconut_repo
 gcc -o coconut coconut.c -I/home/path/to/miniconda3/include -L/home/path/to/miniconda3/lib -lcurl
 
 ```
-Replace /path/to with the folder where Conda was installed.
+Replace /path/to with the path  where miniconda was installed.
 
 Coconut also counts with a Docker implementation:
 Be sure to have [Docker](https://www.docker.com/) installed on your computer, then follow this instructions:
