@@ -126,6 +126,7 @@ And if you want to use a different window of codons:
 | Fetch multiple versions of a transcript     | ⏰        |
 | Slice domains from fetch                    | ⏰        |
 | Slice multiple versions of a transcript & er| ⏰        |
+| Fetch using multiple ID types: UniProt, ENSP| ❌        |
 | Fetch domains from InterPro or CATH         | ❌        |
 | Incorrect length error                      | ❌        |
 | Optional flags (no ATG, no STOP, etc)       | ❌        |
