@@ -1,7 +1,12 @@
 #!/bin/bash
 
+
+## instal script for coconut
+## the script can create folders on the repo folder if the user does not have curl installed
+ 
+## yes the spinner is totally necesary 
 spinner() {
-    # spinner function (just for fun)
+    # (just for fun)
     local msg="$1"
     shift
     local cmd=("$@")
@@ -9,7 +14,7 @@ spinner() {
     "${cmd[@]}" &
     pid=$!
 
-    local delay=0.1
+    local delay=0.3
     local spinstr='|/-\'
     local temp
 
@@ -43,7 +48,7 @@ echo 'checking for gcc, make, and wget'
 REQUIRED_TOOLS=(gcc wget make)
 for tool in "${REQUIRED_TOOLS[@]}"; do
     if ! [ -x "$(command -v "$tool")" ]; then
-        echo "Error: $tool is not installed. Install it and try again." >&2
+        echo "Error: $tool is not installed. Install it and try again, or use the docker option." >&2
         exit 1
     fi
 done
@@ -53,8 +58,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COCONUT_SOURCE="$SCRIPT_DIR/coconut.c"
 
 # check for libcurl
+
+# if you HAVE curl but something goes wrong the install will be aborted.
+# i need to add a function to force the miniconda install, even though the user might have curl 
+
 if ! ldconfig -p | grep -q "libcurl\."; then
-    echo "Library libcurl is not installed. Do you want to install it using the latest verison of Miniconda? (BE C A R E F U L) [y/n]"
+    echo "library curl is not installed. do you want to install it using the latest verison of Miniconda? (BE C A R E F U L) [y/n]"
     read -r response
     if [[ "$response" == [yY] ]]; then
         INSTALL_LIB=true
@@ -63,24 +72,27 @@ if ! ldconfig -p | grep -q "libcurl\."; then
         exit 1
     fi
 else
+
+
     # libcurl is already installed; get the path
     lib_paths=$(ldconfig -p | grep "libcurl\." | awk '{print $NF}' | sort | uniq)
     echo "libcurl is already installed at the following path(s):"
     echo "$lib_paths"
     INSTALL_LIB=false
-    echo "compiling should go smoothly, if not try with miniconda :)"
+    echo "compiling should go smoothly, if not try with miniconda :)" # add an option here
+
 fi
 
 if [ "$INSTALL_LIB" = true ]; then
     echo 'installing Miniconda and setting up environment'
 
-    # Install Miniconda
+    # install Miniconda
     mkdir -p "$SCRIPT_DIR/miniconda3"
     spinner "Downloading Miniconda" wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O "$SCRIPT_DIR/miniconda3/miniconda.sh"
     spinner "Installing Miniconda" bash "$SCRIPT_DIR/miniconda3/miniconda.sh" -b -u -p "$SCRIPT_DIR/miniconda3" > /dev/null 2>&1
     rm "$SCRIPT_DIR/miniconda3/miniconda.sh"
 
-    # Initialize Conda
+    # initialize conda
     export PATH="$SCRIPT_DIR/miniconda3/bin:$PATH"
     source "$SCRIPT_DIR/miniconda3/etc/profile.d/conda.sh"
 
@@ -91,7 +103,7 @@ if [ "$INSTALL_LIB" = true ]; then
     # install libcurl and gcc (gcc maybe it's already installed, but we do it anyways here)
     spinner "installing dependencies" conda install -y libcurl gcc_linux-64 gxx_linux-64
 
-    # Set environment variables
+   # set environment variables
    # CONDA_PREFIX=$(conda info --base)/envs/coconut_env
     export CPATH="$CONDA_PREFIX/include:$CPATH"
     export LIBRARY_PATH="$CONDA_PREFIX/lib:$LIBRARY_PATH"
