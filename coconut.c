@@ -26,9 +26,7 @@
 #define MAX_SEQUENCE_LENGTH 200000 
 #define ID_LENGTH 512 // hopefully 512 is big enough, codonw tends to cut off the id
 #define API_URL_FORMAT "https://rest.ensembl.org/sequence/id/%s?object_type=transcript;type=cds;content-type=text/x-fasta"  // dynamic ID URL
-// here we could define a new API_URL_FORMAT where instead of one it gets all of the different versions of the transcirpt using multiple_sequences=1
-// #define API_URL_FORMAT_MULT "https://rest.ensembl.org/sequence/id/%s?object_type=transcript;type=cds;content-type=text/x-fasta;multiple_sequences=1
-// there needs to be a flag in main and then it should be treated as a multifasta within the fetch and multi fetch :)
+#define API_URL_FORMAT_MULT "https://rest.ensembl.org/sequence/id/%s?type=cds;content-type=text/x-fasta;multiple_sequences=1"
 
 
 
@@ -132,7 +130,7 @@ static size_t WriteMemoryCallback(void *contents, size_t size, size_t nmemb, voi
 }
 
 // fetch protein sequence from Ensembl
-char* fetchProteinSequence(const char* protein_id) {
+char* fetchProteinSequence(const char* protein_id,  bool fetch_multi) {
     CURL *curl_handle;
     CURLcode res;
 
@@ -141,8 +139,12 @@ char* fetchProteinSequence(const char* protein_id) {
     chunk.size = 0;
 
     // dynamic URL using the protein ENST id
-    char url[256];
-    snprintf(url, sizeof(url), API_URL_FORMAT, protein_id);
+  char url[256];
+    if (fetch_multi) {
+        snprintf(url, sizeof(url), API_URL_FORMAT_MULT, protein_id);
+    } else {
+        snprintf(url, sizeof(url), API_URL_FORMAT, protein_id);
+    }
 
     curl_global_init(CURL_GLOBAL_ALL);  
 
@@ -341,10 +343,10 @@ void readCodonUsageData(const char *filename) {
 }
 
 // calculates minmax
-void calculateMinMax(SequenceCodonCounts *seq, int window_size, const char *output_filename) {
-    FILE *minmax_output = fopen(output_filename, "a"); // open in append mode, so we can also proces mulit fastas now
-    if (!minmax_output) {
-        fprintf(stderr, "Error opening minmax output file: %s\n", output_filename);
+void calculateMinMax(SequenceCodonCounts *seq, int window_size, const char *minmax_output_filename) {
+    FILE *minmax_output = fopen(minmax_output_filename, "a"); // open in append mode, so we can also proces mulit fastas now 
+    if (!minmax_output) {                                     // also changed to the other output 
+        fprintf(stderr, "Error opening minmax output file: %s\n", minmax_output_filename);
         exit(1);
     }
 
@@ -595,7 +597,10 @@ void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructi
 //   proccesing bulk  //
 ////////////////////////
 
-void processSequence(const char *sequence_data, const char *sequence_id, FILE *output, bool calculate_cu, bool calculate_rscu, bool calculate_minmax, int window_size, const char *output_filename, bool silent, bool slice_sequence, const char *slice_filename) {
+void processSequence(const char *sequence_data, const char *sequence_id, FILE *output, 
+                     bool calculate_cu, bool calculate_rscu, bool calculate_minmax, 
+                     int window_size, const char *output_filename, const char *minmax_output_filename,
+                     bool silent, bool slice_sequence, const char *slice_filename) {
     // initialize sequence structure
     SequenceCodonCounts currentSequence;
     initializeCodonCounts(&currentSequence);
@@ -640,7 +645,7 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
         // 
        // snprintf(minmax_output_filename, sizeof(minmax_output_filename), "%s_minmax.out", currentSequence.id);
        // calculateMinMax(&currentSequence, window_size, minmax_output_filename);
-        calculateMinMax(&currentSequence, window_size, output_filename);
+        calculateMinMax(&currentSequence, window_size, minmax_output_filename);
 
     }
 
@@ -706,6 +711,8 @@ int main(int argc, char *argv[]) {
     bool fetch_from_file = false; // fetch from a .txt
     bool slice_sequence = false;
     bool calculate_minmax = false;
+    bool fetch_multi = false; // multiple versions of a transcript
+
 
     int window_size = 18;
     int slice_count = 0;
@@ -716,6 +723,8 @@ int main(int argc, char *argv[]) {
     char *output_filename = NULL;
     char *protein_id = NULL;
     char *fetchfile = NULL; // fetch from a .txt
+    char *minmax_output_filename = NULL; // new name var so i don't run into problems using the same one for the rscu stuff :p 
+
 
     // variable declarations for slicing
     SliceInstruction *instructions = NULL;
@@ -749,6 +758,9 @@ int main(int argc, char *argv[]) {
                 output_filename = argv[i + 2];
                 i += 2; }
 
+        } else if (strcmp(argv[i], "-multi") == 0) {
+            fetch_multi = true; 
+
         } else if (strcmp(argv[i], "-slice_domains") == 0) {
             if (i + 1 < argc) {
                 slice_sequence = true;
@@ -777,21 +789,23 @@ int main(int argc, char *argv[]) {
         
         } else if (strcmp(argv[i], "-help") == 0) {
 
-            printf("Usage: %s [options] <input.fasta> [output.csv]\n", argv[0]);
+            printf("Usage: %s [options] <file id> <input.fasta> [output]\n", argv[0]);
             printf("Options:\n");
             printf("  -cu\tCalculate Codon Usage (CU)\n");
             printf("  -rscu\tCalculate Relative Synonymous Codon Usage (RSCU)\n");
             printf("  -all\tCalculate CU and RSCU\n");
             printf("  -silent\tHide outputs from the console\n");
-            printf("  -fetch\tFetch sequence from Ensembl using transcript ID (ENST) (requires protein_id and output_filename)\n");
-            printf("  -fetchfile\tFetch multiple sequences from a text file (requires fetchfile and output_filename)\n");
-            printf("  -slice_domains\tSlice fasta into domains using a CSV-style file (requires slice_filename)\n");
+            printf("  -fetch\tFetch sequence from Ensembl using transcript ID (ENST) (requires ENST ID and output file name)\n");
+            printf("  -fetchfile\tFetch multiple sequences from a text file (requires fetchfile with an ENST list and output file name)\n");
+            printf("  -multi\tFetch all versions of each transcript from a text file or single ID (ENSG, no ENST)\n");
+            printf("  -slice_domains\tSlice fasta into domains using a CSV-style file (requires slice file name)\n");
             printf("  -minmax <codon_usage_file> [window_size]\tCalculate min-max percentage over specified window size (default 18).\n");
             printf("\n");
             printf("\n");
             printf("\n");
             printf("Developed by Juan Mac Donagh at JGU and UNQ\n");
             printf("Contact: macjuan17@gmail.com\n");
+            printf("GitHub Repo: https://github.com/Juanmacdonagh17/coconut_repo");
 
             return 0;
 
@@ -805,24 +819,21 @@ int main(int argc, char *argv[]) {
     ///////////////////////////////////////////
     // errors for arguments or files missing //
     ///////////////////////////////////////////
-    if (!input_filename) {
+
+
+    // if you are NOT fetch but you are using a fasta, you need an input file name! 
+    if ((!input_filename) && (!fetch_sequence && !fetch_from_file)) {
         fprintf(stderr, "Input filename is required.\n");
         return 1;
     }
-    // if ((!input_filename || !output_filename) && !fetch_sequence && !fetch_from_file) {
-    //     fprintf(stderr, "Unkwon command:\n Usage: %s [-cu] [-rscu] [-all] [-silent] [-fetch] [-fetchfile] [-slice_domains] [-minmax <codon_usage_file> [window_size]] [-help] <slice.csv> <input.fasta> <output.csv>\n", argv[0]);
-    //     return 1;
-    // }
+
     // check for output file in both fetch and normal input cases
     if ((calculate_cu || calculate_rscu || slice_sequence || fetch_sequence || fetch_from_file) && !output_filename) {
         fprintf(stderr, "Output filename is required for the selected options.\n");
         return 1;
     }
-    // if (!output_filename) {
-    //     fprintf(stderr, "Output filename is required.\n");
-    //     return 1;
-    // }
- 
+
+    // iniziate the files 
     FILE *output = NULL;
     if (calculate_cu || calculate_rscu || slice_sequence || fetch_sequence || fetch_from_file) {
         output = fopen(output_filename, "w");
@@ -838,17 +849,20 @@ int main(int argc, char *argv[]) {
             writeCsvHeader(output, calculate_cu, calculate_rscu);
         }
     }
+
+    // check that a codon usage file exist and read it
     if (calculate_minmax) {
+
         if (!codon_usage_filename) {
             fprintf(stderr, "Error: Codon usage file must be specified with -minmax flag.\n");
             fclose(output);
             return 1;
         }
-        // Read codon usage data
+        // read codon usage data
         readCodonUsageData(codon_usage_filename);
         printf("Codon usage data loaded successfully.\n");
 
-        // Generate output filename based on input_filename
+        // generate output filename based on input_filename
         char *dot = strrchr(input_filename, '.');
         char *base_filename = NULL;
         if (dot) {
@@ -856,14 +870,14 @@ int main(int argc, char *argv[]) {
         } else {
             base_filename = strdup(input_filename);
         }
-        output_filename = malloc(strlen(base_filename) + 13); // '_minmax.out' + null terminator
-        sprintf(output_filename, "%s_minmax.out", base_filename);
+        minmax_output_filename  = malloc(strlen(base_filename) + 13); // '_minmax.out' + null terminator
+        sprintf(minmax_output_filename, "%s_minmax.out", base_filename);
         free(base_filename);
 
         // Open the output file to write the header
-        FILE *minmax_output = fopen(output_filename, "w");
+        FILE *minmax_output = fopen(minmax_output_filename, "w");
         if (!minmax_output) {
-            fprintf(stderr, "Error opening minmax output file: %s\n", output_filename);
+            fprintf(stderr, "Error opening minmax output file: %s\n", minmax_output_filename);
             fclose(output);
             return 1;
         }
@@ -872,31 +886,30 @@ int main(int argc, char *argv[]) {
         fclose(minmax_output);
     }   
  
-
     char *sequence_data = NULL;
 
 
-
-
+    //      //
     // args //
+    //      //
 
+    // fetch a single sequence
 
-
-    if (fetch_sequence) { // as of 17/10 i can't use the fetch option wtf did I broke NOW PLEASE 
+    if (fetch_sequence) { 
 
         // if (!isEnsemblServerOnline()) {
         //     fprintf(stderr, "Ensembl server is not available. Please try again later.\n");
         //     fclose(output);
         //     return 1;
         // }
-        // fetch a single sequence
+
         if (!silent) {
-            printf("Fetching sequence for protein ID: %s\n", protein_id);
+            printf("Fetching sequence for ID: %s\n", protein_id);
         }
 
-        char *sequence_data = fetchProteinSequence(protein_id);
+        char *sequence_data = fetchProteinSequence(protein_id, fetch_multi);
         if (!sequence_data) {
-            fprintf(stderr, "Failed to fetch sequence for protein ID: %s\n", protein_id);
+            fprintf(stderr, "Failed to fetch sequence for ID: %s\n", protein_id);
             fclose(output);
             return 1;
         }
@@ -904,14 +917,47 @@ int main(int argc, char *argv[]) {
         if (!silent) {
             printf("Fetched Sequence:\n%s\n", sequence_data);
         }
+        
+        char *line = strtok(sequence_data, "\n");
+        SequenceCodonCounts currentSequence;
+        initializeCodonCounts(&currentSequence);
+        bool active = false;
 
+
+        while (line != NULL) {
+            if (line[0] == '>') {
+                if (active) {
+
+                    processSequence(currentSequence.sequence, currentSequence.id, output, calculate_cu, calculate_rscu,
+                                    calculate_minmax, window_size, output_filename, minmax_output_filename, 
+                                    silent, slice_sequence, slice_filename);
+                    initializeCodonCounts(&currentSequence);
+                }
+
+                strncpy(currentSequence.id, line + 1, sizeof(currentSequence.id) - 1);
+                currentSequence.id[sizeof(currentSequence.id) - 1] = '\0';
+                active = true;
+                currentSequence.sequence[0] = '\0';  
+            } else if (active && strlen(line) > 0) {
+
+                strcat(currentSequence.sequence, line);
+            }
+            line = strtok(NULL, "\n");
+        }      
         // process the fetched sequence
-        processSequence(sequence_data, protein_id, output, calculate_cu, calculate_rscu, calculate_minmax, window_size, output_filename, silent, slice_sequence, slice_filename);
+        if (active){ 
 
+            processSequence(currentSequence.sequence, currentSequence.id, output, calculate_cu, calculate_rscu, 
+                            calculate_minmax, window_size, output_filename, minmax_output_filename, 
+                            silent, slice_sequence, slice_filename);
+        }
+        
         free(sequence_data);
 
+   // fetch multiple sequences from a file
+
     } else if (fetch_from_file) {
-        // fetch multiple sequences from a file
+     
         FILE *file = fopen(fetchfile, "r");
         if (!file) {
             fprintf(stderr, "Error opening file: %s\n", fetchfile);
@@ -927,7 +973,7 @@ int main(int argc, char *argv[]) {
                 printf("Fetching sequence for protein ID: %s\n", enst_id);
             }
 
-            char *sequence_data = fetchProteinSequence(enst_id);
+            char *sequence_data = fetchProteinSequence(enst_id, fetch_multi);
             if (!sequence_data) {
                 if (!silent) {
                     fprintf(stderr, "Failed to fetch sequence for ENST ID: %s. Skipping...\n", enst_id);
@@ -940,11 +986,15 @@ int main(int argc, char *argv[]) {
             }
 
             // process the fetched sequence
-            processSequence(sequence_data, enst_id, output, calculate_cu, calculate_rscu, calculate_minmax, window_size, output_filename, silent, slice_sequence, slice_filename);
+            processSequence(sequence_data, enst_id, output, calculate_cu, calculate_rscu, 
+                            calculate_minmax, window_size, output_filename, minmax_output_filename,
+                            silent, slice_sequence, slice_filename);
 
             free(sequence_data);
         }
         fclose(file);
+
+    // use an input file 
 
     } else if (input_filename) {
         // read sequences from a FASTA file
@@ -967,7 +1017,9 @@ int main(int argc, char *argv[]) {
             if (line[0] == '>') {  // header line
                 if (active) {
                     // process the previous sequence
-                    processSequence(currentSequence.sequence, currentSequence.id, output, calculate_cu, calculate_rscu, calculate_minmax, window_size, output_filename, silent, slice_sequence, slice_filename);
+                    processSequence(currentSequence.sequence, currentSequence.id, output, calculate_cu, calculate_rscu, 
+                                    calculate_minmax, window_size, minmax_output_filename,output_filename, 
+                                    silent, slice_sequence, slice_filename);
                 }
                 // start a new sequence
                 strncpy(currentSequence.id, line + 1, sizeof(currentSequence.id) - 1);
@@ -985,7 +1037,9 @@ int main(int argc, char *argv[]) {
 
         // process the last sequence
         if (active) {
-            processSequence(currentSequence.sequence, currentSequence.id, output, calculate_cu, calculate_rscu, calculate_minmax, window_size, output_filename, silent, slice_sequence, slice_filename);
+            processSequence(currentSequence.sequence, currentSequence.id, output, calculate_cu, calculate_rscu, 
+                            calculate_minmax, window_size, output_filename, minmax_output_filename, 
+                            silent, slice_sequence, slice_filename);
         }
 
         fclose(input);
@@ -997,7 +1051,15 @@ int main(int argc, char *argv[]) {
         fclose(output);
     }
 
-    if (output_filename) free(output_filename);
+    if (minmax_output_filename) {
+        free(minmax_output_filename);
+    }
+
+    // this is not needed, as i don't use a malloc for the outputfile name (i think)
+    // if (output_filename) {
+    //     free(output_filename);
+    // }
+
     return 0;
 
 }
