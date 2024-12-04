@@ -68,6 +68,7 @@ Using the -help flag will provide a list of all available commands, but here is 
 + -rscu: calculates Relative Synonimus Codon Usage for an input fasta or multifasta or a fetched ENST.
 + -all: calculates both CU and RSCU for an input fasta or multifasta or a fetched ENST
 + -fetch: fetches a transcript (specifically the main CDS) from Ensembl, using the transcript identifier.
++ -multi: fetches all versions of a transcript, using ENSG instead of ENST
 + -fetchfile: same as fetch, but using a list of identifiers from a file, one per line.
 + -slice_domains: used to easily compare CU and RSCU between domains. It uses a file with "slice instructions" (find examples below).
 + -minmax: calculates the %MinMax for an input fasta or multifasta. If not indicated otherwise, the window of comparison is 18 codons, but this can be changed. For this, a table of optimal use codons is needed. The table for _Homo Sapiens_ is provided.
