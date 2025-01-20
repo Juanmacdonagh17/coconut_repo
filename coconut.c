@@ -173,6 +173,91 @@ char* fetchProteinSequence(const char* protein_id,  bool fetch_multi) {
     return chunk.memory;  // return fetched sequence
 }
 
+// fetch all versions using gene name
+char* fetchGeneID(const char *species, const char *geneName) {
+    char url[512];
+    snprintf(url, sizeof(url),
+             "https://rest.ensembl.org/xrefs/symbol/%s/%s?content-type=application/json",
+             species, geneName);
+    CURL *curl_handle;
+    CURLcode res;
+    struct MemoryStruct chunk;
+    chunk.memory = malloc(1);
+    chunk.size = 0;
+
+    curl_global_init(CURL_GLOBAL_ALL);
+    curl_handle = curl_easy_init();
+    if (!curl_handle) {
+        fprintf(stderr, "Failed to init curl\n");
+        free(chunk.memory);
+        return NULL;
+    }
+
+    curl_easy_setopt(curl_handle, CURLOPT_URL, url);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
+    curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "libcurl-agent/1.0");
+
+    res = curl_easy_perform(curl_handle);
+    if(res != CURLE_OK) {
+        fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        curl_easy_cleanup(curl_handle);
+        curl_global_cleanup();
+        free(chunk.memory);
+        return NULL;
+    }
+
+    curl_easy_cleanup(curl_handle);
+    curl_global_cleanup();
+
+    // this is a very home made approach, i should check other ways to parse the json
+
+    char *json_response = chunk.memory;
+    char *gene_tag = strstr(json_response, "\"type\":\"gene\"");
+    if (!gene_tag) {
+        // No "type":"gene" found
+        fprintf(stderr, "No gene type found in JSON response for %s/%s\n", species, geneName);
+        free(chunk.memory);
+        return NULL;
+    }
+
+    // "id":"something"
+    char *id_field = strstr(gene_tag, "\"id\":\"");
+    if (!id_field) {
+        fprintf(stderr, "No \"id\" field found after type=gene\n");
+        free(chunk.memory);
+        return NULL;
+    }
+
+    id_field += 6; // skip over `"id":"`
+    
+    // read until next quote
+    char *end_quote = strchr(id_field, '\"');
+    if (!end_quote) {
+        fprintf(stderr, "Malformed JSON while reading gene ID\n");
+        free(chunk.memory);
+        return NULL;
+    }
+
+    //  gene ID is the substring [id_field ... end_quote-1]
+    size_t id_len = end_quote - id_field;
+    char *ensg_id = malloc(id_len + 1);
+    if (!ensg_id) {
+        fprintf(stderr, "Memory allocation failed for ensg_id\n");
+        free(chunk.memory);
+        return NULL;
+    }
+
+    strncpy(ensg_id, id_field, id_len);
+    ensg_id[id_len] = '\0'; // null-terminate
+
+    // we don’t need chunk.memory anymore once we have ensg_id
+    free(chunk.memory);
+
+    return ensg_id; // The caller should free() this after use
+}
+
+
 ////////////////////////
 // index functions:   //
 ////////////////////////
@@ -712,6 +797,8 @@ int main(int argc, char *argv[]) {
     bool slice_sequence = false;
     bool calculate_minmax = false;
     bool fetch_multi = false; // multiple versions of a transcript
+    bool fetch_gene = false; // using a gene name instead of an ENSG
+
 
 
     int window_size = 18;
@@ -724,6 +811,8 @@ int main(int argc, char *argv[]) {
     char *protein_id = NULL;
     char *fetchfile = NULL; // fetch from a .txt
     char *minmax_output_filename = NULL; // new name var so i don't run into problems using the same one for the rscu stuff :p 
+    char *gene_species = NULL;
+    char *gene_name = NULL;
 
 
     // variable declarations for slicing
@@ -761,6 +850,17 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "-multi") == 0) {
             fetch_multi = true; 
 
+        } else if (strcmp(argv[i], "-gene") == 0) {
+            if (i + 2 < argc) {
+                fetch_gene    = true;
+                gene_species  = argv[i + 1];  // "homo_sapiens"
+                gene_name     = argv[i + 2];  // "INS"
+                output_filename = argv[i + 3];
+                i += 3; 
+            } else {
+                fprintf(stderr, "Error: -gene requires <species> <gene_symbol>\n");
+                return 1;
+            }
         } else if (strcmp(argv[i], "-slice_domains") == 0) {
             if (i + 1 < argc) {
                 slice_sequence = true;
@@ -822,13 +922,13 @@ int main(int argc, char *argv[]) {
 
 
     // if you are NOT fetch but you are using a fasta, you need an input file name! 
-    if ((!input_filename) && (!fetch_sequence && !fetch_from_file)) {
+    if ((!input_filename) && (!fetch_sequence && !fetch_from_file && !fetch_gene)) {
         fprintf(stderr, "Input filename is required.\n");
         return 1;
     }
 
     // check for output file in both fetch and normal input cases
-    if ((calculate_cu || calculate_rscu || slice_sequence || fetch_sequence || fetch_from_file) && !output_filename) {
+    if ((calculate_cu || calculate_rscu || slice_sequence || fetch_sequence || fetch_from_file || fetch_gene) && !output_filename) {
         fprintf(stderr, "Output filename is required for the selected options.\n");
         return 1;
     }
@@ -894,6 +994,21 @@ int main(int argc, char *argv[]) {
     //      //
 
     // fetch a single sequence
+
+    if (fetch_gene) {
+    // Attempt to fetch the gene’s ENSG
+    char *ensgID = fetchGeneID(gene_species, gene_name);
+    if (!ensgID) {
+        fprintf(stderr, "Failed to fetch or parse gene ID for %s / %s\n", gene_species, gene_name);
+        return 1;
+    }
+
+    // Now set up code exactly as if user did: -fetch ENSG -multi <output_file>
+    fetch_sequence = true;
+    fetch_multi = true; // I only one of them to be true? 
+    protein_id = ensgID;  // re-use the same pointer
+
+    }
 
     if (fetch_sequence) { 
 
@@ -994,6 +1109,7 @@ int main(int argc, char *argv[]) {
         }
         fclose(file);
 
+
     // use an input file 
 
     } else if (input_filename) {
@@ -1055,6 +1171,10 @@ int main(int argc, char *argv[]) {
         free(minmax_output_filename);
     }
 
+    if (fetch_gene) {
+        free(protein_id);  // i.e. free(ensgID) that was stored there
+        protein_id = NULL;
+    }
     // this is not needed, as i don't use a malloc for the outputfile name (i think)
     // if (output_filename) {
     //     free(output_filename);
