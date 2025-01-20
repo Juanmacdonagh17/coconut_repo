@@ -125,9 +125,9 @@ And if you want to use a different window of codons:
 | Calculate MinMax                            | ✅        |
 | Docker image                                | ✅        |
 | Fetch multiple versions of a transcript     | ✅        |
+| Fetch using gene and species symbol         | ✅        |
 | Slice domains from fetch                    | ⏰        |
 | Slice multiple versions of a transcript & er| ⏰        |
-| Fetch using multiple ID types: UniProt, ENSP| ⏰        |
 | Fetch domains from InterPro or CATH         | ❌        |
 | Incorrect length error                      | ❌        |
 | Optional flags (no ATG, no STOP, etc)       | ❌        |
