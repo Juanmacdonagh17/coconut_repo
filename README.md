@@ -135,11 +135,12 @@ And if you want to use a different window of codons:
 | Slice domains from fetch                    | ⏰        |
 | Slice multiple versions of a transcript & er| ⏰        |
 | Fetch domains from InterPro or CATH         | ❌        |
-| Incorrect length error                      | ❌        |
-| Optional flags (no ATG, no STOP, etc)       | ❌        |
 | MobiDB integration for disorder regions     | ❌        |
 | AFDB integration for structural data        | ❌        |
 | NW alignment method                         | ❌        |
+| Incorrect length error                      | ❔        |
+| Optional flags (no ATG, no STOP, etc)       | ❔        |
+                                                      
 ---
 
 
