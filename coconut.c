@@ -207,6 +207,9 @@ char* fetchGeneID(const char *species, const char *geneName) {
         return NULL;
     }
 
+    fprintf(stderr, "\n[DEBUG] Full JSON response:\n%s\n\n", chunk.memory);
+
+
     curl_easy_cleanup(curl_handle);
     curl_global_cleanup();
 
@@ -593,7 +596,7 @@ void parseSliceFile(const char *filename, SliceInstruction **instructions, int *
         token = strtok(NULL, ":");
         if (token) temp_instructions[instr_count].end = atoi(token) - 1;    // zero-index
 
-        // debugging: Print parsed instruction
+        // print parsed instruction in the console, should be skipped if -silent flag is used
         printf("Parsed Instruction %d: Transcript_ID=%s, Domain_Name=%s, Start=%d, End=%d\n",
                instr_count, temp_instructions[instr_count].transcript_id,
                temp_instructions[instr_count].domain_name,
@@ -830,6 +833,7 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "-all") == 0) {
             calculate_cu = true;
             calculate_rscu = true;
+            
         } else if (strcmp(argv[i], "-silent") == 0) {
             silent = true;  // silent mode
 
@@ -898,6 +902,7 @@ int main(int argc, char *argv[]) {
             printf("  -fetch\tFetch sequence from Ensembl using transcript ID (ENST) (requires ENST ID and output file name)\n");
             printf("  -fetchfile\tFetch multiple sequences from a text file (requires fetchfile with an ENST list and output file name)\n");
             printf("  -multi\tFetch all versions of each transcript from a text file or single ID (ENSG, no ENST)\n");
+            printf("  -gene\tFetch all versions of each transcript using species and gene symbol\n");
             printf("  -slice_domains\tSlice fasta into domains using a CSV-style file (requires slice file name)\n");
             printf("  -minmax <codon_usage_file> [window_size]\tCalculate min-max percentage over specified window size (default 18).\n");
             printf("\n");
@@ -1049,8 +1054,17 @@ int main(int argc, char *argv[]) {
                     initializeCodonCounts(&currentSequence);
                 }
 
-                strncpy(currentSequence.id, line + 1, sizeof(currentSequence.id) - 1);
+                char *header = line + 1; // logic so i can also parse domains if needed from a fetch 
+                char *spacePtr = strchr(header, ' ');
+                if (spacePtr) {
+                    *spacePtr = '\0';  
+                }
+
+                strncpy(currentSequence.id, header, sizeof(currentSequence.id) - 1);
                 currentSequence.id[sizeof(currentSequence.id) - 1] = '\0';
+
+                // strncpy(currentSequence.id, line + 1, sizeof(currentSequence.id) - 1);
+                // currentSequence.id[sizeof(currentSequence.id) - 1] = '\0';
                 active = true;
                 currentSequence.sequence[0] = '\0';  
             } else if (active && strlen(line) > 0) {
