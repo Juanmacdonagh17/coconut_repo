@@ -298,6 +298,7 @@ char* fetchEnsemblGeneFromUniProt(const char *uniprot_id) {
     curl_easy_cleanup(curl_handle);
     curl_global_cleanup();
 
+    // just in case
     fprintf(stderr, "[DEBUG] Full JSON:\n%s\n", chunk.memory);
 
     //  naive scanning for: "key":"GeneId", also here the json parsing is "by hand", maybe a library is better? 
@@ -318,7 +319,7 @@ char* fetchEnsemblGeneFromUniProt(const char *uniprot_id) {
         return NULL;
     }
 
-    // Skip past "value":" => 9 characters of length
+    // skipponng here the 9 char for "value":" 
     val_field += 9;
 
     // read until next quote, this is the ENS gene ID
@@ -1041,13 +1042,15 @@ int main(int argc, char *argv[]) {
 
     // if you are NOT fetch but you are using a fasta, you need an input file name! 
     if ((!input_filename) && (!fetch_sequence && !fetch_from_file && !fetch_gene && !fetch_uniprot)) {
-        fprintf(stderr, "Input filename is required.\n");
+        fprintf(stderr, "Some stuff is missing! Input filename is required.\n Try -help to get all the parameters\n");
+         
         return 1;
     }
 
     // check for output file in both fetch and normal input cases
     if ((calculate_cu || calculate_rscu || slice_sequence || fetch_sequence || fetch_from_file || fetch_gene) && !output_filename) {
-        fprintf(stderr, "Output filename is required for the selected options.\n");
+        fprintf(stderr, "Some stuff is missing! Output filename is required for the selected options.\n Try -help to get all the parameters\n");
+         
         return 1;
     }
 
