@@ -62,16 +62,20 @@ docker run -v /home/user/coconut_output:/home/cocouser/output your_image_name -h
 To run Coconut, after installing, just execute ./coconut in the command line.
 Using the -help flag will provide a list of all available commands, but here is a list of commands that Coconut can use (so far):
 
-+ -help: shows all the arguments and options available
++ -help: shows all the arguments and options available.
 + -slinet: optional flag, used for not showing the outputs while running Coconut.
 + -cu: calculates Codon Usage for an input fasta or multifasta or a fetched ENST.
 + -rscu: calculates Relative Synonimus Codon Usage for an input fasta or multifasta or a fetched ENST.
-+ -all: calculates both CU and RSCU for an input fasta or multifasta or a fetched ENST
++ -all: calculates both CU and RSCU for an input fasta or multifasta or a fetched ENST.
++ 
 + -fetch: fetches a transcript (specifically the main CDS) from Ensembl, using the transcript identifier.
-+ -multi: fetches all versions of a transcript, using ENSG instead of ENST
-+ -gene: fetches all versions of a transcript using a species and gene symbol as inputs 
-+ -fetchfile: same as fetch, but using a list of identifiers from a file, one per line.
-+ -slice_domains: used to easily compare CU and RSCU between domains. It uses a file with "slice instructions" (find examples below).
++-fetchfile: same as fetch, but using a list of identifiers from a file, one per line.
++ -multi: fetches all versions of a transcript, using ENSG instead of ENST.
++ -gene: fetches all versions of a transcript using a species and gene symbol as inputs. 
++ -uniprot: fetches all version of a transcript using the UniProt ID as an entry point.
++ 
++ -slice_domains: used to easily compare CU and RSCU between domains. It uses a file with "slice instructions" (find examples below, works with local files and with fetch).
++ 
 + -minmax: calculates the %MinMax for an input fasta or multifasta. If not indicated otherwise, the window of comparison is 18 codons, but this can be changed. For this, a table of optimal use codons is needed. The table for _Homo Sapiens_ is provided.
 
 ---
