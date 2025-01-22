@@ -10,10 +10,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <ctype.h> 
-#include <curl/curl.h> // guarda que acá en el gcc tengo que pasar manualmente donde esta (path de miniconda)
-
-// path local para el gcc: -I/home/juan/miniconda3/include -L/home/juan/miniconda3/lib -lcurl
-
+#include <curl/curl.h>
 
 /////////////////////////
 //  structures         //
@@ -260,6 +257,100 @@ char* fetchGeneID(const char *species, const char *geneName) {
     return ensg_id; // The caller should free() this after use
 }
 
+// fetch using uniprot as an entry point 
+
+char* fetchEnsemblGeneFromUniProt(const char *uniprot_id) {
+    //  URL
+    char url[512];
+    snprintf(url, sizeof(url),
+        "https://rest.uniprot.org/uniprotkb/%s.json?fields=xref_ensembl",
+        uniprot_id);
+
+    // same approach as other fetches
+    CURL *curl_handle;
+    CURLcode res;
+    struct MemoryStruct chunk;
+    chunk.memory = malloc(1);
+    chunk.size = 0;
+
+    curl_global_init(CURL_GLOBAL_ALL);
+    curl_handle = curl_easy_init();
+    if (!curl_handle) {
+        fprintf(stderr, "Failed to init curl\n");
+        free(chunk.memory);
+        return NULL;
+    }
+
+    curl_easy_setopt(curl_handle, CURLOPT_URL, url);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
+    curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "libcurl-agent/1.0");
+
+    res = curl_easy_perform(curl_handle);
+    if(res != CURLE_OK) {
+        fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        curl_easy_cleanup(curl_handle);
+        curl_global_cleanup();
+        free(chunk.memory);
+        return NULL;
+    }
+
+    curl_easy_cleanup(curl_handle);
+    curl_global_cleanup();
+
+    fprintf(stderr, "[DEBUG] Full JSON:\n%s\n", chunk.memory);
+
+    //  naive scanning for: "key":"GeneId", also here the json parsing is "by hand", maybe a library is better? 
+    // something like: "key":"GeneId","value":"ENSG00000142192.22"
+
+    char *gene_tag = strstr(chunk.memory, "\"key\":\"GeneId\"");
+    if (!gene_tag) {
+        fprintf(stderr, "No \"GeneId\" found in JSON for %s\n", uniprot_id);
+        free(chunk.memory);
+        return NULL;
+    }
+
+    // find the next "value":"...ENS...."
+    char *val_field = strstr(gene_tag, "\"value\":\"");
+    if (!val_field) {
+        fprintf(stderr, "No \"value\" found after GeneId\n");
+        free(chunk.memory);
+        return NULL;
+    }
+
+    // Skip past "value":" => 9 characters of length
+    val_field += 9;
+
+    // read until next quote, this is the ENS gene ID
+    char *end_quote = strchr(val_field, '\"');
+    if (!end_quote) {
+        fprintf(stderr, "Malformed JSON while reading GeneId\n");
+        free(chunk.memory);
+        return NULL;
+    }
+
+    size_t id_len = end_quote - val_field;
+    char *ensg_id = malloc(id_len + 1);
+    if (!ensg_id) {
+        fprintf(stderr, "Memory allocation failed for ensg_id\n");
+        free(chunk.memory);
+        return NULL;
+    }
+
+    strncpy(ensg_id, val_field, id_len);
+    ensg_id[id_len] = '\0';
+
+    free(chunk.memory);
+
+    // strip version from ensg_id if it has .NN at the end, with out this the fetch will fail
+    // "ENSG00000142192.22" => "ENSG00000142192"
+    char *dotPtr = strchr(ensg_id, '.');
+    if (dotPtr) {
+        *dotPtr = '\0';
+    }
+
+    return ensg_id;
+}
 
 ////////////////////////
 // index functions:   //
@@ -801,7 +892,7 @@ int main(int argc, char *argv[]) {
     bool calculate_minmax = false;
     bool fetch_multi = false; // multiple versions of a transcript
     bool fetch_gene = false; // using a gene name instead of an ENSG
-
+    bool fetch_uniprot = false; // fetch from uniprot
 
 
     int window_size = 18;
@@ -816,11 +907,15 @@ int main(int argc, char *argv[]) {
     char *minmax_output_filename = NULL; // new name var so i don't run into problems using the same one for the rscu stuff :p 
     char *gene_species = NULL;
     char *gene_name = NULL;
-
+    char *uniprot_id = NULL;
 
     // variable declarations for slicing
     SliceInstruction *instructions = NULL;
 
+
+// the order for the inputs and outputs files is a bit tricky. If there's something out of place, it would name the ouptut as the slice file, etc etc
+// maybe I should add a flag for the output file?
+// it should be exremly clear on the help file 
 
     for (int i = 1; i < argc; i++) {
 
@@ -841,14 +936,14 @@ int main(int argc, char *argv[]) {
             if (i + 2 < argc) {
                 fetch_sequence = true;
                 protein_id = argv[i + 1];
-                output_filename = argv[i + 2];
+                output_filename = argv[i + 2]; // output AFTER fetch!!!
                 i += 2;  } // adjust 'i' after consuming arguments 
 
         } else if (strcmp(argv[i], "-fetchfile") == 0) {
             if (i + 2 < argc) {
                 fetch_from_file = true;
                 fetchfile = argv[i + 1];
-                output_filename = argv[i + 2];
+                output_filename = argv[i + 2]; // output AFTER fetch file!!!
                 i += 2; }
 
         } else if (strcmp(argv[i], "-multi") == 0) {
@@ -859,12 +954,24 @@ int main(int argc, char *argv[]) {
                 fetch_gene    = true;
                 gene_species  = argv[i + 1];  // "homo_sapiens"
                 gene_name     = argv[i + 2];  // "INS"
-                output_filename = argv[i + 3];
+                output_filename = argv[i + 3]; // output AFTER gene name!!!
                 i += 3; 
             } else {
                 fprintf(stderr, "Error: -gene requires <species> <gene_symbol>\n");
                 return 1;
             }
+
+        } else if (strcmp(argv[i], "-uniprot") == 0) {
+            if (i + 2 < argc) {
+                fetch_uniprot = true;
+                uniprot_id = argv[i + 1];       // e.g. "P05067"
+                output_filename = argv[i + 2];  // output AFTER uniprot!!!
+                i += 2;
+            } else {
+                fprintf(stderr, "Error: -uniprot requires <UniProt_ID> <output_file>\n");
+                return 1;
+            }
+
         } else if (strcmp(argv[i], "-slice_domains") == 0) {
             if (i + 1 < argc) {
                 slice_sequence = true;
@@ -895,15 +1002,21 @@ int main(int argc, char *argv[]) {
 
             printf("Usage: %s [options] <file id> <input.fasta> [output]\n", argv[0]);
             printf("Options:\n");
+            printf("   \t\n");
             printf("  -cu\tCalculate Codon Usage (CU)\n");
             printf("  -rscu\tCalculate Relative Synonymous Codon Usage (RSCU)\n");
             printf("  -all\tCalculate CU and RSCU\n");
+            printf("   \t\n");
             printf("  -silent\tHide outputs from the console\n");
+            printf("   \t\n");
             printf("  -fetch\tFetch sequence from Ensembl using transcript ID (ENST) (requires ENST ID and output file name)\n");
             printf("  -fetchfile\tFetch multiple sequences from a text file (requires fetchfile with an ENST list and output file name)\n");
             printf("  -multi\tFetch all versions of each transcript from a text file or single ID (ENSG, no ENST)\n");
             printf("  -gene\tFetch all versions of each transcript using species and gene symbol\n");
-            printf("  -slice_domains\tSlice fasta into domains using a CSV-style file (requires slice file name)\n");
+            printf("  -uniprot\tFetch sequence from UniProt using UniProt ID\n");
+            printf("   \t\n");
+            printf("  -slice_domains\tSlice fasta into domains using a CSV-style file (requires slice file name, works with input and all fetches)\n");
+            printf("   \t\n");
             printf("  -minmax <codon_usage_file> [window_size]\tCalculate min-max percentage over specified window size (default 18).\n");
             printf("\n");
             printf("\n");
@@ -927,7 +1040,7 @@ int main(int argc, char *argv[]) {
 
 
     // if you are NOT fetch but you are using a fasta, you need an input file name! 
-    if ((!input_filename) && (!fetch_sequence && !fetch_from_file && !fetch_gene)) {
+    if ((!input_filename) && (!fetch_sequence && !fetch_from_file && !fetch_gene && !fetch_uniprot)) {
         fprintf(stderr, "Input filename is required.\n");
         return 1;
     }
@@ -1012,6 +1125,22 @@ int main(int argc, char *argv[]) {
     fetch_sequence = true;
     fetch_multi = true; // I only one of them to be true? 
     protein_id = ensgID;  // re-use the same pointer
+
+    }
+
+
+    if (fetch_uniprot) {
+        // parse the gene from the UniProt JSON
+        char *ensgID = fetchEnsemblGeneFromUniProt(uniprot_id);
+        if (!ensgID) {
+            fprintf(stderr, "Failed to get an Ensembl Gene from UniProt ID %s\n", uniprot_id);
+            return 1;
+        }
+
+        // we have "ENSG00000142192", do a multi fetch
+        fetch_sequence = true;
+        fetch_multi    = true;
+        protein_id     = ensgID;
 
     }
 
