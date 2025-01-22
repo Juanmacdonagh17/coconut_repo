@@ -132,11 +132,12 @@ And if you want to use a different window of codons:
 | Docker image                                | ✅        |
 | Fetch multiple versions of a transcript     | ✅        |
 | Fetch using gene and species symbol         | ✅        |
-| Slice domains from fetch                    | ⏰        |
-| Slice multiple versions of a transcript & er| ⏰        |
+| Slice domains from fetch                    | ✅        |
+| Slice multiple versions from fetch          | ✅        |
+| UniProt as entry point for request          | ❌        |
+| AFDB integration for structural data        | ❌        |
 | Fetch domains from InterPro or CATH         | ❌        |
 | MobiDB integration for disorder regions     | ❌        |
-| AFDB integration for structural data        | ❌        |
 | NW alignment method                         | ❌        |
 | Incorrect length error                      | ❔        |
 | Optional flags (no ATG, no STOP, etc)       | ❔        |
