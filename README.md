@@ -138,7 +138,7 @@ And if you want to use a different window of codons:
 | Fetch using gene and species symbol         | ✅        |
 | Slice domains from fetch                    | ✅        |
 | Slice multiple versions from fetch          | ✅        |
-| UniProt as entry point for request          | ❌        |
+| UniProt as entry point for request          | ✅        |
 | AFDB integration for structural data        | ❌        |
 | Fetch domains from InterPro or CATH         | ❌        |
 | MobiDB integration for disorder regions     | ❌        |
