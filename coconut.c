@@ -11,6 +11,7 @@
 #include <stdbool.h>
 #include <ctype.h> 
 #include <curl/curl.h>
+#include <math.h>
 
 /////////////////////////
 //  structures         //
@@ -74,6 +75,18 @@ typedef struct {
 } CodonUsageStats;
 CodonUsageStats codon_usage_stats[4][4][4]; 
 
+typedef struct {
+    int residueNumber;  // from columns 23..26
+    float x, y, z;      // from columns 31..54
+    float pLDDT;        // from columns 61..66
+    int flexible;       // 1 = flexible, 0 = rigid
+    char classification[16]; // e.g. "rigid", "tail", "loop", "linker"
+} CA_Residue;
+
+typedef struct {
+    int startIdx;
+    int endIdx;
+} Region;
 
 // 64 codons
 const char* codons[MAX_CODONS] = { 
@@ -170,11 +183,12 @@ char* fetchProteinSequence(const char* protein_id,  bool fetch_multi) {
     return chunk.memory;  // return fetched sequence
 }
 
+
 // fetch all versions using gene name
 char* fetchGeneID(const char *species, const char *geneName) {
     char url[512];
     snprintf(url, sizeof(url),
-             "https://rest.ensembl.org/xrefs/symbol/%s/%s?content-type=application/json",
+             "https://rest.ensembl.org/xrefs/symbol/%s/%s?content-type=application/json", // i could define this string before, like i do with the others?
              species, geneName);
     CURL *curl_handle;
     CURLcode res;
@@ -204,7 +218,7 @@ char* fetchGeneID(const char *species, const char *geneName) {
         return NULL;
     }
 
-    fprintf(stderr, "\n[DEBUG] Full JSON response:\n%s\n\n", chunk.memory);
+    //fprintf(stderr, "\n[DEBUG] Full JSON response:\n%s\n\n", chunk.memory);
 
 
     curl_easy_cleanup(curl_handle);
@@ -299,7 +313,7 @@ char* fetchEnsemblGeneFromUniProt(const char *uniprot_id) {
     curl_global_cleanup();
 
     // just in case
-    fprintf(stderr, "[DEBUG] Full JSON:\n%s\n", chunk.memory);
+    //fprintf(stderr, "[DEBUG] Full JSON:\n%s\n", chunk.memory);
 
     //  naive scanning for: "key":"GeneId", also here the json parsing is "by hand", maybe a library is better? 
     // something like: "key":"GeneId","value":"ENSG00000142192.22"
@@ -352,6 +366,526 @@ char* fetchEnsemblGeneFromUniProt(const char *uniprot_id) {
 
     return ensg_id;
 }
+
+////////////////////////
+// AF & pLDDT f(x):   //
+////////////////////////
+
+// fetch the alphafold models
+
+char* fetchAlphaFoldMetaJSON(const char *uniprot_id) {
+    char url[256];
+    snprintf(url, sizeof(url),
+             "https://alphafold.ebi.ac.uk/api/prediction/%s", // this also could be defined with the rest
+             uniprot_id);
+
+    struct MemoryStruct chunk;
+    chunk.memory = malloc(1);
+    chunk.size = 0;
+
+    CURL *curl_handle = curl_easy_init();
+    if (!curl_handle) {
+        fprintf(stderr, "Failed to init curl\n");
+        free(chunk.memory);
+        return NULL;
+    }
+    curl_global_init(CURL_GLOBAL_ALL);
+
+    curl_easy_setopt(curl_handle, CURLOPT_URL, url);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
+    curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "libcurl-agent/1.0");
+
+    CURLcode res = curl_easy_perform(curl_handle);
+    if(res != CURLE_OK) {
+        fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        curl_easy_cleanup(curl_handle);
+        curl_global_cleanup();
+        free(chunk.memory);
+        return NULL;
+    }
+
+    curl_easy_cleanup(curl_handle);
+    curl_global_cleanup();
+    //fprintf(stderr, "\n[DEBUG] Full JSON response:\n%s\n\n", chunk.memory);
+    return chunk.memory; // free the request
+}
+
+char* parseAlphaFoldPdbUrl(const char *json) {
+    // find "pdbUrl":
+    char *pdbField = strstr(json, "\"pdbUrl\":\"");
+    if (!pdbField) {
+        fprintf(stderr, "No pdbUrl found in AlphaFold JSON.\n");
+        return NULL;
+    }
+    // skip over `"pdbUrl":"`
+    pdbField += 10;
+
+    // read until next quote
+    char *endQuote = strchr(pdbField, '\"');
+    if (!endQuote) {
+        fprintf(stderr, "Malformed JSON for pdbUrl.\n");
+        return NULL;
+    }
+
+    size_t urlLen = endQuote - pdbField;
+    char *pdbUrl = malloc(urlLen + 1);
+    if (!pdbUrl) {
+        fprintf(stderr, "Memory error.\n");
+        return NULL;
+    }
+    strncpy(pdbUrl, pdbField, urlLen);
+    pdbUrl[urlLen] = '\0';
+
+    return pdbUrl; // caller frees
+}
+
+// ferch the PDB file from the alphafold models json avobe 
+char* fetchAlphaFoldPDB(const char *pdb_url) {
+    struct MemoryStruct chunk;
+    chunk.memory = malloc(1);
+    chunk.size = 0;
+
+    CURL *curl_handle = curl_easy_init();
+    if (!curl_handle) {
+        fprintf(stderr, "Failed to init curl\n");
+        free(chunk.memory);
+        return NULL;
+    }
+    curl_global_init(CURL_GLOBAL_ALL);
+
+    curl_easy_setopt(curl_handle, CURLOPT_URL, pdb_url);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
+    curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "libcurl-agent/1.0");
+
+    CURLcode res = curl_easy_perform(curl_handle);
+    if(res != CURLE_OK) {
+        fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
+        curl_easy_cleanup(curl_handle);
+        curl_global_cleanup();
+        free(chunk.memory);
+        return NULL;
+    }
+
+    curl_easy_cleanup(curl_handle);
+    curl_global_cleanup();
+
+    // chunk.memory now holds the entire PDB file in a char*
+    // fprintf(stderr, "\n[DEBUG] Full PDB response:\n%s\n\n", chunk.memory);
+    return chunk.memory; // free memory
+}
+
+// parse the PDB file to get the pLDDT and contacts 
+
+// function to compute euclidean distance between two CA coordinates
+static float dist(const CA_Residue *a, const CA_Residue *b) {
+    float dx = a->x - b->x;
+    float dy = a->y - b->y;
+    float dz = a->z - b->z;
+    return sqrtf(dx*dx + dy*dy + dz*dz);
+}
+
+
+CA_Residue* parsePDBforCA(const char *pdbData, int *count) {
+    // We'll store up to 100000 CA residues, adjust if you have huge proteins
+    int capacity = 100000;
+    CA_Residue *resArray = malloc(sizeof(CA_Residue)*capacity);
+    if (!resArray) {
+        fprintf(stderr, "Memory error in parsePDBforCA\n");
+        return NULL;
+    }
+    int n = 0;
+
+    // Make a copy for tokenizing lines
+    char *tmp = strdup(pdbData);
+    if (!tmp) {
+        free(resArray);
+        return NULL;
+    }
+    char *line = strtok(tmp, "\n");
+    while (line) {
+        // Check if line starts with "ATOM"
+        // For PDB, columns 1..4 are "ATOM", column 7..11 is an atom serial...
+        // We'll do a minimal check on the first 2 chars:
+        if (strncmp(line, "ATOM", 4) == 0) {
+            // Check if columns 13..16 = "CA  "
+            // line[12..15]
+            if (strncmp(line + 13, "CA", 2) == 0) {
+
+                // parse residueNumber from columns 23..26
+                char resNumStr[5];
+                strncpy(resNumStr, line + 22, 4);
+                resNumStr[4] = '\0';
+                int resNum = atoi(resNumStr);
+
+                // parse x from columns 31..38
+                char xStr[9];
+                strncpy(xStr, line + 30, 8);
+                xStr[8] = '\0';
+                float x = atof(xStr);
+
+                // parse y from columns 38..46
+                char yStr[9];
+                strncpy(yStr, line + 38, 8);
+                yStr[8] = '\0';
+                float y = atof(yStr);
+
+                // parse z from columns 46..54
+                char zStr[9];
+                strncpy(zStr, line + 46, 8);
+                zStr[8] = '\0';
+                float z = atof(zStr);
+
+                // parse pLDDT from columns 61..66
+                char bfactorStr[7];
+                strncpy(bfactorStr, line + 60, 6);
+                bfactorStr[6] = '\0';
+                float plddtVal = atof(bfactorStr);
+
+                if (n >= capacity) {
+                    // reallocate
+                    capacity *= 2;
+                    CA_Residue *tmp2 = realloc(resArray, capacity * sizeof(CA_Residue));
+                    if (!tmp2) {
+                        fprintf(stderr, "Realloc error in parsePDBforCA\n");
+                        free(resArray);
+                        free(tmp);
+                        return NULL;
+                    }
+                    resArray = tmp2;
+                }
+
+                resArray[n].residueNumber = resNum;
+                resArray[n].x = x;
+                resArray[n].y = y;
+                resArray[n].z = z;
+                resArray[n].pLDDT = plddtVal;
+                resArray[n].flexible = 0; // default
+                strcpy(resArray[n].classification, "unknown");
+                n++;
+            }
+        }
+        line = strtok(NULL, "\n");
+    }
+
+    free(tmp);
+    *count = n;
+    return resArray;
+}
+
+static void classifyFlexibleRigid(CA_Residue *res, int n, float cutoff) {
+    // Mark flexible vs rigid
+    for (int i = 0; i < n; i++) {
+        if (res[i].pLDDT < cutoff) {
+            res[i].flexible = 1;  // flexible
+        } else {
+            res[i].flexible = 0;  // rigid
+        }
+        strcpy(res[i].classification, "rigid"); // default label; will override if flexible
+    }
+}
+
+// This function scans consecutive flexible residues, if a run >= "minRunFlex" => that region is "valid flexible region".
+// We'll store them in a Region array.
+
+static Region* findFlexibleRegions(const CA_Residue *res, int n, int minRun, int *regionCount) {
+    int cap = 10000;
+    Region *regs = malloc(sizeof(Region)*cap);
+    int count = 0;
+
+    int i = 0;
+    while (i < n) {
+        if (res[i].flexible == 1) {
+            int start = i;
+            while (i < n && res[i].flexible == 1) {
+                i++;
+            }
+            int end = i-1;
+            int length = end - start + 1;
+            if (length >= minRun) {
+                // store region
+                if (count >= cap) {
+                    cap *= 2;
+                    Region *tmp = realloc(regs, cap*sizeof(Region));
+                    if (!tmp) {
+                        fprintf(stderr, "Memory error in findFlexibleRegions\n");
+                        free(regs);
+                        return NULL;
+                    }
+                    regs = tmp;
+                }
+                regs[count].startIdx = start;
+                regs[count].endIdx   = end;
+                count++;
+            }
+        } else {
+            i++;
+        }
+    }
+
+    *regionCount = count;
+    return regs;
+}
+
+static Region* findRigidRegions(const CA_Residue *res, int n, int minRun, int *regionCount) {
+    int cap = 10000;
+    Region *regs = malloc(sizeof(Region)*cap);
+    int count = 0;
+
+    int i = 0;
+    while (i < n) {
+        if (res[i].flexible == 0) {
+            int start = i;
+            while (i < n && res[i].flexible == 0) {
+                i++;
+            }
+            int end = i-1;
+            int length = end - start + 1;
+            if (length >= minRun) {
+                // store region
+                if (count >= cap) {
+                    cap *= 2;
+                    Region *tmp = realloc(regs, cap*sizeof(Region));
+                    if (!tmp) {
+                        fprintf(stderr, "Memory error in findRigidRegions\n");
+                        free(regs);
+                        return NULL;
+                    }
+                    regs = tmp;
+                }
+                regs[count].startIdx = start;
+                regs[count].endIdx   = end;
+                count++;
+            }
+        } else {
+            i++;
+        }
+    }
+
+    *regionCount = count;
+    return regs;
+}
+
+static int countContacts(const CA_Residue *res, Region rA, Region rB, float distCutoff) {
+    int contacts = 0;
+    for (int i = rA.startIdx; i <= rA.endIdx; i++) {
+        for (int j = rB.startIdx; j <= rB.endIdx; j++) {
+            float d = dist(&res[i], &res[j]);
+            if (d <= distCutoff) {
+                contacts++;
+            }
+        }
+    }
+    return contacts;
+}
+
+void analyzeAndWriteFlexibleCSV(
+    CA_Residue *res, int n,
+    float plddt_cutoff,      // e.g. 70.0
+    int minFlexibleRun,      // e.g. 3 or 5
+    int minRigidRun,         // e.g. 1 or 2
+    float contact_dist,      // e.g. 8.0
+    const char *csvFilename
+) {
+    // 1) Rigid/flexible classification
+    classifyFlexibleRigid(res, n, plddt_cutoff);
+
+    // 2) Find flexible regions
+    int flexRegionCount = 0;
+    Region *flexRegs = findFlexibleRegions(res, n, minFlexibleRun, &flexRegionCount);
+
+    // 3) Find rigid regions
+    int rigidRegionCount = 0;
+    Region *rigidRegs = findRigidRegions(res, n, minRigidRun, &rigidRegionCount);
+
+    // If no rigid => pure IDP
+    if (rigidRegionCount == 0) {
+        // Mark all as pure_IDP
+        for (int i = 0; i < n; i++) {
+            strcpy(res[i].classification, "pure_IDP");
+        }
+    } else {
+        // We do a quick labeling: everything not in a valid flexible region => "rigid"
+        // Then override the flexible region classification below
+        for (int i = 0; i < flexRegionCount; i++) {
+            Region fr = flexRegs[i];
+            // Check if it has no rigid on the left => tail if startIdx > 0
+            // Actually let's find the nearest rigid region on the left and right
+            // We'll do a simple approach:
+            // R_left is the rigid region that ends right before fr.startIdx (largest endIdx < start)
+            // R_right is the rigid region that starts right after fr.endIdx (smallest startIdx > end)
+            // If none => tail. If both => check contact >= 10 => loop, else => linker
+
+            // find R_left
+            int leftIdx = -1; 
+            int rightIdx = -1;
+            for (int r = 0; r < rigidRegionCount; r++) {
+                if (rigidRegs[r].endIdx < fr.startIdx) {
+                    // candidate for left
+                    if (leftIdx < 0 || rigidRegs[r].endIdx > rigidRegs[leftIdx].endIdx) {
+                        leftIdx = r;
+                    }
+                }
+                if (rigidRegs[r].startIdx > fr.endIdx) {
+                    // candidate for right
+                    if (rightIdx < 0 || rigidRegs[r].startIdx < rigidRegs[rightIdx].startIdx) {
+                        rightIdx = r;
+                    }
+                }
+            }
+
+            // classify
+            if (leftIdx < 0 && rightIdx < 0) {
+                // entire protein is flexible except for some short rigid not meeting minRun => but we have rigidRegionCount > 0
+                // For simplicity, call it "tail" or "linker"? We'll call it "linker" here.
+                for (int rr = fr.startIdx; rr <= fr.endIdx; rr++) {
+                    strcpy(res[rr].classification, "linker");
+                }
+            } else if (leftIdx < 0 || rightIdx < 0) {
+                // Means it's at N-term or C-term => tail
+                for (int rr = fr.startIdx; rr <= fr.endIdx; rr++) {
+                    strcpy(res[rr].classification, "tail");
+                }
+            } else {
+                // We have two rigid neighbors => check contacts
+                int c = countContacts(res, rigidRegs[leftIdx], rigidRegs[rightIdx], contact_dist);
+                if (c >= 10) {
+                    // loop
+                    for (int rr = fr.startIdx; rr <= fr.endIdx; rr++) {
+                        strcpy(res[rr].classification, "loop");
+                    }
+                } else {
+                    // linker
+                    for (int rr = fr.startIdx; rr <= fr.endIdx; rr++) {
+                        strcpy(res[rr].classification, "linker");
+                    }
+                }
+            }
+        }
+    }
+
+    // Write CSV
+    FILE *fp = fopen(csvFilename, "w");
+    if (!fp) {
+        fprintf(stderr, "Error opening %s for writing.\n", csvFilename);
+        free(flexRegs);
+        free(rigidRegs);
+        return;
+    }
+    fprintf(fp, "Residue,PLDDT,clasif\n");
+    for (int i = 0; i < n; i++) {
+        fprintf(fp, "%d,%.2f,%s\n",
+                res[i].residueNumber,
+                res[i].pLDDT,
+                res[i].classification);
+    }
+    fclose(fp);
+
+    free(flexRegs);
+    free(rigidRegs);
+}
+
+
+// float* parsePDBforPLDDT(const char *pdb, int *countResidues) {
+//     // store B-factors for each CA atom line
+//     float *allPLDDT = malloc(sizeof(float) * 50000); // some large initial capacity too big / small??? 
+//     if (!allPLDDT) {
+//         fprintf(stderr, "Memory error, ask Juan to fix this\n"); 
+//         return NULL;
+//     }
+//     int capacity = 50000;
+//     int n = 0;
+
+//     // copy so we can tokenize
+//     char *tmp = strdup(pdb);
+//     if (!tmp) {
+//         free(allPLDDT);
+//         return NULL;
+//     }
+
+//     char *line = strtok(tmp, "\n");
+//     while (line) {
+//         // check if it starts with "ATOM  " (positions 1–6 in the PDB file)
+//         if (strncmp(line, "ATOM", 4) == 0) {
+//             // columns 13–16 (line[12..15]) for " CA "
+//             if (strncmp(line + 13, "CA", 2) == 0) {
+//                 // B-factor from columns 61–66
+//                 // (line[60..65] in 0-based indexing)
+//                 char bfactorStr[7];
+//                 strncpy(bfactorStr, line + 60, 6);
+//                 bfactorStr[6] = '\0';  // null-terminate
+
+//                 float plddt = strtof(bfactorStr, NULL);
+
+//                 // store in array, reallocate if needed
+//                 if (n >= capacity) {
+//                     capacity *= 2;
+//                     float *tmpBuf = realloc(allPLDDT, capacity * sizeof(float));
+//                     if (!tmpBuf) {
+//                         fprintf(stderr, "Realloc error\n");
+//                         free(allPLDDT);
+//                         free(tmp);
+//                         return NULL;
+//                     }
+//                     allPLDDT = tmpBuf;
+//                 }
+//                 allPLDDT[n++] = plddt;
+//            }
+//         }
+//         line = strtok(NULL, "\n");
+//     }
+//     free(tmp);
+
+//     // shrink the array to exactly n floats
+//     float *finalArr = malloc(sizeof(float) * n);
+//     if (!finalArr) {
+//         free(allPLDDT);
+//         return NULL;
+//     }
+//     memcpy(finalArr, allPLDDT, n * sizeof(float));
+//     free(allPLDDT);
+
+//     *countResidues = n;
+//     //fprintf(stderr, "[DEBUG] pLDDT array, length=%d:\n", *countResidues);
+//     // for (int i = 0; i < *countResidues; i++) {
+//     //     fprintf(stderr, "%d: %.2f\n", i, finalArr[i]);
+//     // }
+//     return finalArr;
+// }
+
+// // function to run all the stuff avobe 
+// float* getAlphaFoldPLDDTForUniprot(const char *uniprot_id, int *resCount) {
+//     // fetch meta JSON
+//     char *metaJson = fetchAlphaFoldMetaJSON(uniprot_id);
+//     if (!metaJson) {
+//         return NULL; // error already logged
+//     }
+
+//     // parse out the "pdbUrl"
+//     char *pdbUrl = parseAlphaFoldPdbUrl(metaJson);
+//     free(metaJson);
+//     if (!pdbUrl) {
+//         return NULL;
+//     }
+
+//     // fetch the PDB file
+//     char *pdbData = fetchAlphaFoldPDB(pdbUrl);
+//     free(pdbUrl);
+//     if (!pdbData) {
+//         return NULL;
+//     }
+
+//     // parse the B-factor column for pLDDT
+//     float *plddtArray = parsePDBforPLDDT(pdbData, resCount);
+//     free(pdbData);
+
+//     if (!plddtArray) {
+//         return NULL; // error
+//     }
+//     return plddtArray; // caller must free
+// }
+
 
 ////////////////////////
 // index functions:   //
@@ -888,12 +1422,13 @@ int main(int argc, char *argv[]) {
     bool calculate_rscu = false;
     bool silent = false;  // silent flag so you don't get all the printf or fprintf:
     bool fetch_sequence = false;
-    bool fetch_from_file = false; // fetch from a .txt
+    bool fetch_from_file = false; // fetch from a file with a list of IDs
     bool slice_sequence = false;
     bool calculate_minmax = false;
     bool fetch_multi = false; // multiple versions of a transcript
-    bool fetch_gene = false; // using a gene name instead of an ENSG
-    bool fetch_uniprot = false; // fetch from uniprot
+    bool fetch_gene = false; // using a gene name instead of an ENSEMBL gene ID
+    bool fetch_uniprot = false; // fetch from IniProt
+    bool fetch_alphafold = false; // fetch pLDDT from AlphaFold
 
 
     int window_size = 18;
@@ -914,9 +1449,9 @@ int main(int argc, char *argv[]) {
     SliceInstruction *instructions = NULL;
 
 
-// the order for the inputs and outputs files is a bit tricky. If there's something out of place, it would name the ouptut as the slice file, etc etc
-// maybe I should add a flag for the output file?
-// it should be exremly clear on the help file 
+    // the order for the inputs and outputs files is a bit tricky. If there's something out of place, it would name the ouptut as the slice file, etc etc
+    // maybe I should add a flag for the output file?
+    // it should be exremly clear on the help file 
 
     for (int i = 1; i < argc; i++) {
 
@@ -973,6 +1508,10 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
 
+        } else if (strcmp(argv[i], "-af") == 0) {
+
+            fetch_alphafold = true;
+
         } else if (strcmp(argv[i], "-slice_domains") == 0) {
             if (i + 1 < argc) {
                 slice_sequence = true;
@@ -1015,6 +1554,7 @@ int main(int argc, char *argv[]) {
             printf("  -multi\tFetch all versions of each transcript from a text file or single ID (ENSG, no ENST)\n");
             printf("  -gene\tFetch all versions of each transcript using species and gene symbol\n");
             printf("  -uniprot\tFetch sequence from UniProt using UniProt ID\n");
+            printf("  -af\tFetch AlphaFold pLDDT data using UniProt ID\n");
             printf("   \t\n");
             printf("  -slice_domains\tSlice fasta into domains using a CSV-style file (requires slice file name, works with input and all fetches)\n");
             printf("   \t\n");
@@ -1054,9 +1594,15 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    // if you run the -af, you need also to run the -uniprot flag
+    if (fetch_alphafold && !fetch_uniprot) {
+        fprintf(stderr, "Error: -af can only be used if -uniprot is also specified.\n");
+        return 1;
+    }
+
     // iniziate the files 
     FILE *output = NULL;
-    if (calculate_cu || calculate_rscu || slice_sequence || fetch_sequence || fetch_from_file) {
+    if (calculate_cu || calculate_rscu || slice_sequence || fetch_sequence || fetch_from_file || fetch_gene || fetch_uniprot) {
         output = fopen(output_filename, "w");
         if (!output) {
             if (!silent) {
@@ -1140,10 +1686,102 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
+        // new af stuff, I put this here but also I could do it with a flag...
+
+        // int plddtCount = 0;
+        // float *plddtArray = NULL;
+        //float *plddtArray = getAlphaFoldPLDDTForUniprot(uniprot_id, &plddtCount);
+    // if (fetch_alphafold) {
+    //         plddtArray = getAlphaFoldPLDDTForUniprot(uniprot_id, &plddtCount);
+    //         if (!plddtArray) {
+    //             fprintf(stderr, "Warning: Could not retrieve pLDDT from AlphaFold for uniprot ID: %s\n", uniprot_id);
+    //         }
+    //     }
+if (fetch_alphafold) {
+    // 1) Fetch the AlphaFold metadata JSON
+    char *metaJson = fetchAlphaFoldMetaJSON(uniprot_id); 
+    char af_csv_name[512]; // 512 chars should be enough? 
+
+    snprintf(af_csv_name, sizeof(af_csv_name), "%s_pLDDT.csv", uniprot_id);
+    if (!metaJson) {
+        fprintf(stderr, "Could not fetch AlphaFold JSON for UniProt: %s\n", uniprot_id);
+        // handle error
+    } else {
+        // 2) Parse out the "pdbUrl" from metaJson
+        char *pdbUrl = parseAlphaFoldPdbUrl(metaJson); 
+        free(metaJson);
+        if (!pdbUrl) {
+            fprintf(stderr, "No pdbUrl in AlphaFold JSON for %s\n", uniprot_id);
+            // handle error
+        } else {
+            // 3) Now fetch the actual PDB file
+            char *pdbData = fetchAlphaFoldPDB(pdbUrl);
+            free(pdbUrl);
+            if (!pdbData) {
+                fprintf(stderr, "Could not fetch PDB data!\n");
+                // handle error
+            } else {
+                // parse & classify
+                int nRes = 0;
+                CA_Residue *arr = parsePDBforCA(pdbData, &nRes);
+                free(pdbData);
+                if (!arr || nRes == 0) {
+                    fprintf(stderr, "No CA residues parsed!\n");
+                } else {
+                    analyzeAndWriteFlexibleCSV(
+                        arr, nRes,
+                        70.0f, // pLDDT cutoff => 70
+                        3,     // minFlexibleRun => 3
+                        1,     // minRigidRun => 1
+                        8.0f,  // contact_dist
+                        af_csv_name // output filename
+  
+                    );
+                    free(arr);
+                    fprintf(stdout, "Wrote classification to %s.csv\n", af_csv_name);
+                    }
+                }
+            }
+        }
+    }
+
+
+    fetch_sequence = true;
+    fetch_multi    = true;
+    protein_id     = ensgID;
+
+    // if (plddtArray) {
+    //     // Decide how to write them:  // this should be upstairs, with all the functions, I'll leave it here for now :p 
+
+    //     char af_csv_name[512]; // 512 chars should be enough? 
+
+    //     snprintf(af_csv_name, sizeof(af_csv_name), "%s_pLDDT.csv", uniprot_id);
+
+    //     FILE *af_csv = fopen(af_csv_name, "w");
+    //     if (!af_csv) {
+    //         fprintf(stderr, "Error: could not open %s for writing pLDDT data.\n", af_csv_name);
+    //     } else {
+    //         fprintf(af_csv, "Residue,PLDDT\n");
+    //         for (int i = 0; i < plddtCount; i++) {
+    //             fprintf(af_csv, "%d,%.2f\n", i+1, plddtArray[i]);
+    //         }
+    //         fclose(af_csv);
+    //         fprintf(stdout, "AlphaFold pLDDT saved to %s\n", af_csv_name);
+    //     }
+
+    //     free(plddtArray);
+    //}
+            // Pdebugging the pLDDT stuff
+            //printf("\nAlphaFold pLDDT for %s (CA atoms only):\n", uniprot_id);
+            //for (int i = 0; i < plddtCount && i < 10; i++) {
+                // just print first 10 to not spam
+               // printf("Residue %d pLDDT= %.2f\n", i+1, plddtArray[i]);
+            //}
+            // printf("...(total CA count: %d)\n", plddtCount);
+            // free(plddtArray);
+
         // we have "ENSG00000142192", do a multi fetch
-        fetch_sequence = true;
-        fetch_multi    = true;
-        protein_id     = ensgID;
+        
 
     }
 
