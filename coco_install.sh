@@ -121,9 +121,10 @@ if [ "$INSTALL_LIB" = true ]; then
         -I"$CONDA_PREFIX/include" \
         -L"$CONDA_PREFIX/lib" \
         -Wl,-rpath,"$CONDA_PREFIX/lib" \
-        -lcurl
+        -lcurl \
+        -lm \ 
 else
-    spinner "Compiling" gcc -o coconut "$COCONUT_SOURCE" -lcurl
+    spinner "Compiling" gcc -o coconut "$COCONUT_SOURCE" -lcurl -lm
 fi
 
 echo 'Installation complete :) To run coconut: ./coconut -help'
