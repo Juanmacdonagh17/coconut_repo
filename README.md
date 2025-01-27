@@ -139,7 +139,8 @@ And if you want to use a different window of codons:
 | Slice domains from fetch                    | ✅        |
 | Slice multiple versions from fetch          | ✅        |
 | UniProt as entry point for request          | ✅        |
-| AFDB integration for structural data        | ❌        |
+| AFDB integration for structural data        | ✅        |
+| AF structure classification                 | ✅        |
 | Fetch domains from InterPro or CATH         | ❌        |
 | MobiDB integration for disorder regions     | ❌        |
 | NW alignment method                         | ❌        |
