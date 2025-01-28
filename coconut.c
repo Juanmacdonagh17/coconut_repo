@@ -24,11 +24,18 @@
 #define MAX_SEQUENCE_LENGTH 200000 
 #define ID_LENGTH 512 // hopefully 512 is big enough, codonw tends to cut off the id
 #define API_URL_FORMAT "https://rest.ensembl.org/sequence/id/%s?object_type=transcript;type=cds;content-type=text/x-fasta"  // dynamic ID URL
-#define API_URL_FORMAT_MULT "https://rest.ensembl.org/sequence/id/%s?type=cds;content-type=text/x-fasta;multiple_sequences=1"
+#define API_URL_FORMAT_MULT "https://rest.ensembl.org/sequence/id/%s?type=cds;content-type=text/x-fasta;multiple_sequences=1" // dynamic ID URL
+// there are some values down the pipeline that should be added here, the the af and uniprot fetches
 
 
+/////////////////////////
+//     functions       //
+/////////////////////////
+//////////////////////////
+//     structures       //
+//////////////////////////
 
-// structures that we will use as output
+// structure to store codon counts
 typedef struct {
     char codon[CODON_LENGTH + 1];
 
@@ -45,12 +52,14 @@ typedef struct {
 } CodonCount;
 
 // structure to handle HTTP response
+
 struct MemoryStruct {
     char *memory;
     size_t size;
 };
 
 // structure for protein ID, codon count and nt seq
+
 typedef struct {
     char id[ID_LENGTH]; 
     CodonCount counts[MAX_CODONS];
@@ -58,6 +67,7 @@ typedef struct {
     } SequenceCodonCounts;
 
 // structure for slicig and domain analysis
+
 typedef struct {
     char transcript_id[ID_LENGTH];
     char domain_name[ID_LENGTH];
@@ -66,6 +76,7 @@ typedef struct {
 } SliceInstruction;
 
 // minmax params
+
 typedef struct {
     float usage;
     float max;
@@ -75,6 +86,7 @@ typedef struct {
 } CodonUsageStats;
 CodonUsageStats codon_usage_stats[4][4][4]; 
 
+// pdb parsing params and structures params 
 typedef struct {
     int residueNumber;  // from columns 23..26
     float x, y, z;      // from columns 31..54
@@ -87,6 +99,7 @@ typedef struct {
     int startIdx;
     int endIdx;
 } Region;
+
 
 // 64 codons
 const char* codons[MAX_CODONS] = { 
@@ -112,9 +125,6 @@ const char amino_acids[MAX_CODONS] = {
     '*', 'C', 'W', 'C', 'L', 'F', 'L', 'F'
 };
 
-/////////////////////////
-//     functions       //
-/////////////////////////
 
 ////////////////////////
 // request functions: //
@@ -170,8 +180,8 @@ char* fetchProteinSequence(const char* protein_id,  bool fetch_multi) {
         res = curl_easy_perform(curl_handle);
        
         if(res != CURLE_OK) {
-            fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res)); // 17/10 every time i get this error?? 
-                                                                                          // ENSEMBLE WTF I changed nothing and now worls? gotta keep looking
+            fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res)); // this sometimes fails, but is due to ENSMBl server, not the code
+                                                                                          // maybe a ping could be added?
             return NULL;
         }
 
@@ -183,10 +193,9 @@ char* fetchProteinSequence(const char* protein_id,  bool fetch_multi) {
     return chunk.memory;  // return fetched sequence
 }
 
-
 // fetch all versions using gene name
 char* fetchGeneID(const char *species, const char *geneName) {
-    char url[512];
+    char url[512]; // 512 is a good size for the url
     snprintf(url, sizeof(url),
              "https://rest.ensembl.org/xrefs/symbol/%s/%s?content-type=application/json", // i could define this string before, like i do with the others?
              species, geneName);
@@ -218,13 +227,14 @@ char* fetchGeneID(const char *species, const char *geneName) {
         return NULL;
     }
 
+    // debbuing just in case
     //fprintf(stderr, "\n[DEBUG] Full JSON response:\n%s\n\n", chunk.memory);
-
 
     curl_easy_cleanup(curl_handle);
     curl_global_cleanup();
 
     // this is a very home made approach, i should check other ways to parse the json
+    // i just look for the type gene and then the id
 
     char *json_response = chunk.memory;
     char *gene_tag = strstr(json_response, "\"type\":\"gene\"");
@@ -268,13 +278,13 @@ char* fetchGeneID(const char *species, const char *geneName) {
     // we don’t need chunk.memory anymore once we have ensg_id
     free(chunk.memory);
 
-    return ensg_id; // The caller should free() this after use
+    return ensg_id; // free() this after use
 }
 
 // fetch using uniprot as an entry point 
 
 char* fetchEnsemblGeneFromUniProt(const char *uniprot_id) {
-    //  URL
+    //  URL, again it can be defined avobe, for now leave it here
     char url[512];
     snprintf(url, sizeof(url),
         "https://rest.uniprot.org/uniprotkb/%s.json?fields=xref_ensembl",
@@ -312,29 +322,47 @@ char* fetchEnsemblGeneFromUniProt(const char *uniprot_id) {
     curl_easy_cleanup(curl_handle);
     curl_global_cleanup();
 
-    // just in case
+    // just in case, debbuging 
     //fprintf(stderr, "[DEBUG] Full JSON:\n%s\n", chunk.memory);
 
     //  naive scanning for: "key":"GeneId", also here the json parsing is "by hand", maybe a library is better? 
     // something like: "key":"GeneId","value":"ENSG00000142192.22"
+    // this can be switched to look for the ENSG instead of the ENST, but it makes less sense, as you have 1 protein, 1 af model, you would want 1 transcript
+    // in the json: 
+    // {
+    //   "entryType": "UniProtKB reviewed (Swiss-Prot)",
+    //   "primaryAccession": "P04637",
+    //   "uniProtKBCrossReferences": [
+    //     {
+    //       "database": "Ensembl",
+    //       "id": "ENST00000269305.9", // i look for this
+    //       "properties": [
+    //         {
+    //           "key": "ProteinId",
+    //           "value": "ENSP00000269305.4"
+    //         },
+    //         {
+    //           "key": "GeneId",
+    //           "value": "ENSG00000141510.19" // instead of this , but with a few changes it could be done
 
-    char *gene_tag = strstr(chunk.memory, "\"key\":\"GeneId\"");
+    char *gene_tag = strstr(chunk.memory, "\"database\":\"Ensembl\""); //"\"key\":\"GeneId\"");
     if (!gene_tag) {
         fprintf(stderr, "No \"GeneId\" found in JSON for %s\n", uniprot_id);
         free(chunk.memory);
         return NULL;
     }
 
-    // find the next "value":"...ENS...."
-    char *val_field = strstr(gene_tag, "\"value\":\"");
+    // find the next "value":"...ENS...." 
+    // the ENS is key, as different species use different endings! 
+    char *val_field = strstr(gene_tag, "\"id\":\"");
     if (!val_field) {
         fprintf(stderr, "No \"value\" found after GeneId\n");
         free(chunk.memory);
         return NULL;
     }
 
-    // skipponng here the 9 char for "value":" 
-    val_field += 9;
+    // skipponng here the 9 char for "value":" or the 6 for "id":"
+    val_field += 6; //9
 
     // read until next quote, this is the ENS gene ID
     char *end_quote = strchr(val_field, '\"');
@@ -358,7 +386,7 @@ char* fetchEnsemblGeneFromUniProt(const char *uniprot_id) {
     free(chunk.memory);
 
     // strip version from ensg_id if it has .NN at the end, with out this the fetch will fail
-    // "ENSG00000142192.22" => "ENSG00000142192"
+    // "ENST00000142192.22" => "ENST00000142192"
     char *dotPtr = strchr(ensg_id, '.');
     if (dotPtr) {
         *dotPtr = '\0';
@@ -376,7 +404,7 @@ char* fetchEnsemblGeneFromUniProt(const char *uniprot_id) {
 char* fetchAlphaFoldMetaJSON(const char *uniprot_id) {
     char url[256];
     snprintf(url, sizeof(url),
-             "https://alphafold.ebi.ac.uk/api/prediction/%s", // this also could be defined with the rest
+             "https://alphafold.ebi.ac.uk/api/prediction/%s", // this also could be defined with the rest ?
              uniprot_id);
 
     struct MemoryStruct chunk;
@@ -407,7 +435,10 @@ char* fetchAlphaFoldMetaJSON(const char *uniprot_id) {
 
     curl_easy_cleanup(curl_handle);
     curl_global_cleanup();
+
+    // just in case, debbuging
     //fprintf(stderr, "\n[DEBUG] Full JSON response:\n%s\n\n", chunk.memory);
+    
     return chunk.memory; // free the request
 }
 
@@ -440,7 +471,8 @@ char* parseAlphaFoldPdbUrl(const char *json) {
     return pdbUrl; // caller frees
 }
 
-// ferch the PDB file from the alphafold models json avobe 
+// fetch the PDB file from the alphafold models json avobe 
+
 char* fetchAlphaFoldPDB(const char *pdb_url) {
     struct MemoryStruct chunk;
     chunk.memory = malloc(1);
@@ -472,32 +504,36 @@ char* fetchAlphaFoldPDB(const char *pdb_url) {
     curl_global_cleanup();
 
     // chunk.memory now holds the entire PDB file in a char*
+
     // fprintf(stderr, "\n[DEBUG] Full PDB response:\n%s\n\n", chunk.memory);
     return chunk.memory; // free memory
 }
 
-// parse the PDB file to get the pLDDT and contacts 
+// parse the PDB file to get the pLDDT and contacts:
 
 // function to compute euclidean distance between two CA coordinates
-static float dist(const CA_Residue *a, const CA_Residue *b) {
-    float dx = a->x - b->x;
-    float dy = a->y - b->y;
-    float dz = a->z - b->z;
-    return sqrtf(dx*dx + dy*dy + dz*dz);
+
+static float dist(const CA_Residue *a, const CA_Residue *b) { // define dist, here we use stuff from math 
+    float dx = a->x - b->x; // x1 - x2
+    float dy = a->y - b->y; // y1 - y2
+    float dz = a->z - b->z; // z1 - z2
+    return sqrtf(dx*dx + dy*dy + dz*dz); //  sqrt((x1-x2)^2 + (y1-y2)^2 + (z1-z2)^2), to get the euclidean distance
 }
 
 
 CA_Residue* parsePDBforCA(const char *pdbData, int *count) {
-    // We'll store up to 100000 CA residues, adjust if you have huge proteins
+
+    // the human Titin has 34350 Aa, so 100000 should be enough for most proteins
+
     int capacity = 100000;
     CA_Residue *resArray = malloc(sizeof(CA_Residue)*capacity);
     if (!resArray) {
-        fprintf(stderr, "Memory error in parsePDBforCA\n");
+        fprintf(stderr, "Memory error in parsePDBforCA, is the proteins too big?\n");
         return NULL;
     }
     int n = 0;
 
-    // Make a copy for tokenizing lines
+    // copy for tokenizing lines
     char *tmp = strdup(pdbData);
     if (!tmp) {
         free(resArray);
@@ -505,9 +541,9 @@ CA_Residue* parsePDBforCA(const char *pdbData, int *count) {
     }
     char *line = strtok(tmp, "\n");
     while (line) {
-        // Check if line starts with "ATOM"
-        // For PDB, columns 1..4 are "ATOM", column 7..11 is an atom serial...
-        // We'll do a minimal check on the first 2 chars:
+        // if line starts with "ATOM"
+        // for a PDB file, columns 1..4 are "ATOM", column 7..11 is an atom serial...
+    
         if (strncmp(line, "ATOM", 4) == 0) {
             // Check if columns 13..16 = "CA  "
             // line[12..15]
@@ -575,9 +611,9 @@ CA_Residue* parsePDBforCA(const char *pdbData, int *count) {
 }
 
 static void classifyFlexibleRigid(CA_Residue *res, int n, float cutoff) {
-    // Mark flexible vs rigid
+    //  flexible vs rigid
     for (int i = 0; i < n; i++) {
-        if (res[i].pLDDT < cutoff) {
+        if (res[i].pLDDT < cutoff) { // cutoff is declared in main, it's 0.7
             res[i].flexible = 1;  // flexible
         } else {
             res[i].flexible = 0;  // rigid
@@ -586,8 +622,8 @@ static void classifyFlexibleRigid(CA_Residue *res, int n, float cutoff) {
     }
 }
 
-// This function scans consecutive flexible residues, if a run >= "minRunFlex" => that region is "valid flexible region".
-// We'll store them in a Region array.
+// the function scans consecutive flexible residues, if a run >= "minRunFlex" (3 or more) => that region is "valid flexible region"
+// store them in a Region array.
 
 static Region* findFlexibleRegions(const CA_Residue *res, int n, int minRun, int *regionCount) {
     int cap = 10000;
@@ -628,6 +664,8 @@ static Region* findFlexibleRegions(const CA_Residue *res, int n, int minRun, int
     return regs;
 }
 
+// same as before, but for solid regions!
+
 static Region* findRigidRegions(const CA_Residue *res, int n, int minRun, int *regionCount) {
     int cap = 10000;
     Region *regs = malloc(sizeof(Region)*cap);
@@ -667,6 +705,9 @@ static Region* findRigidRegions(const CA_Residue *res, int n, int minRun, int *r
     return regs;
 }
 
+// this part has a complexity of O(N^2) (I THINK), so it's not the best, but it's not that bad either
+// I've tried with some larg AF models and it wokred relativly fast in my machine
+
 static int countContacts(const CA_Residue *res, Region rA, Region rB, float distCutoff) {
     int contacts = 0;
     for (int i = rA.startIdx; i <= rA.endIdx; i++) {
@@ -682,37 +723,38 @@ static int countContacts(const CA_Residue *res, Region rA, Region rB, float dist
 
 void analyzeAndWriteFlexibleCSV(
     CA_Residue *res, int n,
-    float plddt_cutoff,      // e.g. 70.0
-    int minFlexibleRun,      // e.g. 3 or 5
-    int minRigidRun,         // e.g. 1 or 2
-    float contact_dist,      // e.g. 8.0
+    float plddt_cutoff,      //  70.0
+    int minFlexibleRun,      //  3 
+    int minRigidRun,         //  1 (I should make it larger i think...)
+    float contact_dist,      //  8.0 armstrongs 
     const char *csvFilename
 ) {
-    // 1) Rigid/flexible classification
+    // 1) rigid/flexible classification
     classifyFlexibleRigid(res, n, plddt_cutoff);
 
-    // 2) Find flexible regions
+    // 2) find flexible regions
     int flexRegionCount = 0;
     Region *flexRegs = findFlexibleRegions(res, n, minFlexibleRun, &flexRegionCount);
 
-    // 3) Find rigid regions
+    // 3) find rigid regions
     int rigidRegionCount = 0;
     Region *rigidRegs = findRigidRegions(res, n, minRigidRun, &rigidRegionCount);
 
-    // If no rigid => pure IDP
+    // no rigid => pure IDP
     if (rigidRegionCount == 0) {
-        // Mark all as pure_IDP
+        // mark all as pure_IDP
         for (int i = 0; i < n; i++) {
             strcpy(res[i].classification, "pure_IDP");
         }
     } else {
-        // We do a quick labeling: everything not in a valid flexible region => "rigid"
-        // Then override the flexible region classification below
+        // quick labeling: everything not in a valid flexible region => "rigid"
+        //  override the flexible region classification below
         for (int i = 0; i < flexRegionCount; i++) {
             Region fr = flexRegs[i];
-            // Check if it has no rigid on the left => tail if startIdx > 0
-            // Actually let's find the nearest rigid region on the left and right
-            // We'll do a simple approach:
+            // check if it has no rigid on the left => tail if startIdx > 0
+
+            //  find the nearest rigid region on the left and right
+            // simple approach:
             // R_left is the rigid region that ends right before fr.startIdx (largest endIdx < start)
             // R_right is the rigid region that starts right after fr.endIdx (smallest startIdx > end)
             // If none => tail. If both => check contact >= 10 => loop, else => linker
@@ -738,17 +780,17 @@ void analyzeAndWriteFlexibleCSV(
             // classify
             if (leftIdx < 0 && rightIdx < 0) {
                 // entire protein is flexible except for some short rigid not meeting minRun => but we have rigidRegionCount > 0
-                // For simplicity, call it "tail" or "linker"? We'll call it "linker" here.
+                // For simplicity, let's call it "linker" here.
                 for (int rr = fr.startIdx; rr <= fr.endIdx; rr++) {
                     strcpy(res[rr].classification, "linker");
                 }
             } else if (leftIdx < 0 || rightIdx < 0) {
-                // Means it's at N-term or C-term => tail
+                // it's at N-term or C-term => tail
                 for (int rr = fr.startIdx; rr <= fr.endIdx; rr++) {
                     strcpy(res[rr].classification, "tail");
                 }
             } else {
-                // We have two rigid neighbors => check contacts
+                // if it has two rigid neighbors => check contacts
                 int c = countContacts(res, rigidRegs[leftIdx], rigidRegs[rightIdx], contact_dist);
                 if (c >= 10) {
                     // loop
@@ -765,15 +807,16 @@ void analyzeAndWriteFlexibleCSV(
         }
     }
 
-    // Write CSV
+    // CSV stuff
+
     FILE *fp = fopen(csvFilename, "w");
     if (!fp) {
         fprintf(stderr, "Error opening %s for writing.\n", csvFilename);
-        free(flexRegs);
-        free(rigidRegs);
+        free(flexRegs);  // free the memory from the regions
+        free(rigidRegs); // free the memory from the regions
         return;
     }
-    fprintf(fp, "Residue,PLDDT,clasif\n");
+    fprintf(fp, "residue,pLDDT,classification\n");
     for (int i = 0; i < n; i++) {
         fprintf(fp, "%d,%.2f,%s\n",
                 res[i].residueNumber,
@@ -782,110 +825,9 @@ void analyzeAndWriteFlexibleCSV(
     }
     fclose(fp);
 
-    free(flexRegs);
-    free(rigidRegs);
+    free(flexRegs);  // free the memory from the regions
+    free(rigidRegs); // free the memory from the regions
 }
-
-
-// float* parsePDBforPLDDT(const char *pdb, int *countResidues) {
-//     // store B-factors for each CA atom line
-//     float *allPLDDT = malloc(sizeof(float) * 50000); // some large initial capacity too big / small??? 
-//     if (!allPLDDT) {
-//         fprintf(stderr, "Memory error, ask Juan to fix this\n"); 
-//         return NULL;
-//     }
-//     int capacity = 50000;
-//     int n = 0;
-
-//     // copy so we can tokenize
-//     char *tmp = strdup(pdb);
-//     if (!tmp) {
-//         free(allPLDDT);
-//         return NULL;
-//     }
-
-//     char *line = strtok(tmp, "\n");
-//     while (line) {
-//         // check if it starts with "ATOM  " (positions 1–6 in the PDB file)
-//         if (strncmp(line, "ATOM", 4) == 0) {
-//             // columns 13–16 (line[12..15]) for " CA "
-//             if (strncmp(line + 13, "CA", 2) == 0) {
-//                 // B-factor from columns 61–66
-//                 // (line[60..65] in 0-based indexing)
-//                 char bfactorStr[7];
-//                 strncpy(bfactorStr, line + 60, 6);
-//                 bfactorStr[6] = '\0';  // null-terminate
-
-//                 float plddt = strtof(bfactorStr, NULL);
-
-//                 // store in array, reallocate if needed
-//                 if (n >= capacity) {
-//                     capacity *= 2;
-//                     float *tmpBuf = realloc(allPLDDT, capacity * sizeof(float));
-//                     if (!tmpBuf) {
-//                         fprintf(stderr, "Realloc error\n");
-//                         free(allPLDDT);
-//                         free(tmp);
-//                         return NULL;
-//                     }
-//                     allPLDDT = tmpBuf;
-//                 }
-//                 allPLDDT[n++] = plddt;
-//            }
-//         }
-//         line = strtok(NULL, "\n");
-//     }
-//     free(tmp);
-
-//     // shrink the array to exactly n floats
-//     float *finalArr = malloc(sizeof(float) * n);
-//     if (!finalArr) {
-//         free(allPLDDT);
-//         return NULL;
-//     }
-//     memcpy(finalArr, allPLDDT, n * sizeof(float));
-//     free(allPLDDT);
-
-//     *countResidues = n;
-//     //fprintf(stderr, "[DEBUG] pLDDT array, length=%d:\n", *countResidues);
-//     // for (int i = 0; i < *countResidues; i++) {
-//     //     fprintf(stderr, "%d: %.2f\n", i, finalArr[i]);
-//     // }
-//     return finalArr;
-// }
-
-// // function to run all the stuff avobe 
-// float* getAlphaFoldPLDDTForUniprot(const char *uniprot_id, int *resCount) {
-//     // fetch meta JSON
-//     char *metaJson = fetchAlphaFoldMetaJSON(uniprot_id);
-//     if (!metaJson) {
-//         return NULL; // error already logged
-//     }
-
-//     // parse out the "pdbUrl"
-//     char *pdbUrl = parseAlphaFoldPdbUrl(metaJson);
-//     free(metaJson);
-//     if (!pdbUrl) {
-//         return NULL;
-//     }
-
-//     // fetch the PDB file
-//     char *pdbData = fetchAlphaFoldPDB(pdbUrl);
-//     free(pdbUrl);
-//     if (!pdbData) {
-//         return NULL;
-//     }
-
-//     // parse the B-factor column for pLDDT
-//     float *plddtArray = parsePDBforPLDDT(pdbData, resCount);
-//     free(pdbData);
-
-//     if (!plddtArray) {
-//         return NULL; // error
-//     }
-//     return plddtArray; // caller must free
-// }
-
 
 ////////////////////////
 // index functions:   //
@@ -907,10 +849,6 @@ int getAminoAcidIndex(char* codon) {
             // subtract 'A' from the corresponding amino acid character to get an index.
             // this index is calculated based on the position of the amino acid character in the alphabet,
             // where 'A' is 0, 'B' is 1, ..., 'Z' is 25.
-
-            // i think there is a bug here? specially with TTT. 
-
-            // FIXED... there was an issue with how the table and the stops were ordered!! 
             
             return amino_acids[i] - 'A';  
             
@@ -944,8 +882,7 @@ void initializeCodonCounts(SequenceCodonCounts *seq) {
         strcpy(seq->counts[i].codon, codons[i]);
         seq->counts[i].count = 0; // start count at 0
         seq->counts[i].cu = 0.0; // start CU at 0 :P 
-        // maybe here too we should start RSCU at 0?
-        seq->counts[i].rscu = 0.0; // yes? 
+        seq->counts[i].rscu = 0.0; // same
         
     }
     seq->sequence[0] = '\0'; // initialize sequence to empty string
@@ -1144,7 +1081,8 @@ void calculateMinMax(SequenceCodonCounts *seq, int window_size, const char *minm
 ////////////////////////
 
 
-// write the header for the CSV
+// write the header for the CSV for CU and RSCU
+
 void writeCsvHeader(FILE *file, bool includeCU, bool includeRSCU) {
     fprintf(file, "ID");
     for (int i = 0; i < MAX_CODONS; i++) {
@@ -1160,6 +1098,7 @@ void writeCsvHeader(FILE *file, bool includeCU, bool includeRSCU) {
 }
 
 // write the rows for the CSV
+
 void writeCsvRow(FILE *file, SequenceCodonCounts *seq, bool includeCU, bool includeRSCU) {
     fprintf(file, "%s", seq->id);
     for (int i = 0; i < MAX_CODONS; i++) {
@@ -1174,12 +1113,12 @@ void writeCsvRow(FILE *file, SequenceCodonCounts *seq, bool includeCU, bool incl
     fprintf(file, "\n");
 }
 
-
 ////////////////////////
 // slicer functions:  //
 ////////////////////////
 
 // parse the file with the instructions for slicing the sequence
+
 void parseSliceFile(const char *filename, SliceInstruction **instructions, int *count) {
     FILE *file = fopen(filename, "r");
     if (!file) {
@@ -1236,13 +1175,9 @@ void parseSliceFile(const char *filename, SliceInstruction **instructions, int *
     *count = instr_count;
 }
 
-
-
 // be aware that you need to select the # of codon (that is also the corresponding position of the Aa in the sequence!)
-// a seuqnece that has 30 nt, has 10 codons, and so 10 Aa. If you use "30" for the last Aa, it will raise an out of bounds error
+// a sequence that has 30 nt, has 10 codons, and so 10 Aa. If you use "30" for the last Aa, it will raise an out of bounds error
 // maybe add a flag for this?
-
-// this part requeires some serious debuging 
 
 void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructions, int instr_count, FILE *output, bool calculate_cu, bool calculate_rscu, bool silent, bool calculate_minmax, int window_size, const char *output_filename) {    for (int i = 0; i < instr_count; i++) {
         if (strcmp(seq->id, instructions[i].transcript_id) == 0) {
@@ -1355,8 +1290,7 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
         //printf("Minmax output filename: %s\n", minmax_output_filename);
 
         // HERE there are some issues with how the output file is named. 
-        // the output gets spaces and a binch of thins, it should be better handeled. 
-        // 
+
        // snprintf(minmax_output_filename, sizeof(minmax_output_filename), "%s_minmax.out", currentSequence.id);
        // calculateMinMax(&currentSequence, window_size, minmax_output_filename);
         calculateMinMax(&currentSequence, window_size, minmax_output_filename);
@@ -1379,6 +1313,7 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
     }
 }
 
+// ping to see if ensemble is up. is could do the same for af and up, but i don't think it's necessary
 
 // bool isEnsemblServerOnline() {
 //     CURL *curl;
@@ -1418,28 +1353,28 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
 ////////////////////////
 
 int main(int argc, char *argv[]) {
-    bool calculate_cu = false;
-    bool calculate_rscu = false;
-    bool silent = false;  // silent flag so you don't get all the printf or fprintf:
-    bool fetch_sequence = false;
-    bool fetch_from_file = false; // fetch from a file with a list of IDs
-    bool slice_sequence = false;
-    bool calculate_minmax = false;
-    bool fetch_multi = false; // multiple versions of a transcript
-    bool fetch_gene = false; // using a gene name instead of an ENSEMBL gene ID
-    bool fetch_uniprot = false; // fetch from IniProt
+    bool calculate_cu = false;              // calculate codon usage
+    bool calculate_rscu = false;           // calculate relative codon usage
+    bool silent = false;                  // silent flag so you don't get all the printf or fprintf:
+    bool fetch_sequence = false;         // fetch a sequence from ENSEMBL
+    bool fetch_from_file = false;       // fetch from a file with a list of IDs
+    bool slice_sequence = false;       // slice sequences into domains
+    bool calculate_minmax = false;    // calculate %minmax
+    bool fetch_multi = false;        // multiple versions of a transcript
+    bool fetch_gene = false;        // using a gene name instead of an ENSEMBL gene ID
+    bool fetch_uniprot = false;    // fetch from IniProt
     bool fetch_alphafold = false; // fetch pLDDT from AlphaFold
 
 
-    int window_size = 18;
-    int slice_count = 0;
+    int window_size = 18;      // default window size for minmax
+    int slice_count = 0;      // number of slice instructions starts at 0
 
     char *codon_usage_filename = NULL;
-    char *slice_filename = NULL;  // path to slice file
+    char *slice_filename = NULL;  
     char *input_filename = NULL;
     char *output_filename = NULL;
     char *protein_id = NULL;
-    char *fetchfile = NULL; // fetch from a .txt
+    char *fetchfile = NULL; 
     char *minmax_output_filename = NULL; // new name var so i don't run into problems using the same one for the rscu stuff :p 
     char *gene_species = NULL;
     char *gene_name = NULL;
@@ -1472,14 +1407,14 @@ int main(int argc, char *argv[]) {
             if (i + 2 < argc) {
                 fetch_sequence = true;
                 protein_id = argv[i + 1];
-                output_filename = argv[i + 2]; // output AFTER fetch!!!
+                output_filename = argv[i + 2]; // output AFTER fetch!!! it's the name for CU / RSCU file
                 i += 2;  } // adjust 'i' after consuming arguments 
 
         } else if (strcmp(argv[i], "-fetchfile") == 0) {
             if (i + 2 < argc) {
                 fetch_from_file = true;
                 fetchfile = argv[i + 1];
-                output_filename = argv[i + 2]; // output AFTER fetch file!!!
+                output_filename = argv[i + 2]; // output AFTER fetch file!!! it's the name for CU / RSCU file
                 i += 2; }
 
         } else if (strcmp(argv[i], "-multi") == 0) {
@@ -1490,7 +1425,7 @@ int main(int argc, char *argv[]) {
                 fetch_gene    = true;
                 gene_species  = argv[i + 1];  // "homo_sapiens"
                 gene_name     = argv[i + 2];  // "INS"
-                output_filename = argv[i + 3]; // output AFTER gene name!!!
+                output_filename = argv[i + 3]; // output AFTER gene name!!! it's the name for CU / RSCU file
                 i += 3; 
             } else {
                 fprintf(stderr, "Error: -gene requires <species> <gene_symbol>\n");
@@ -1500,8 +1435,8 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "-uniprot") == 0) {
             if (i + 2 < argc) {
                 fetch_uniprot = true;
-                uniprot_id = argv[i + 1];       // e.g. "P05067"
-                output_filename = argv[i + 2];  // output AFTER uniprot!!!
+                uniprot_id = argv[i + 1];      
+                output_filename = argv[i + 2];  // output AFTER uniprot!!! it's the name for CU / RSCU file
                 i += 2;
             } else {
                 fprintf(stderr, "Error: -uniprot requires <UniProt_ID> <output_file>\n");
@@ -1511,19 +1446,21 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "-af") == 0) {
 
             fetch_alphafold = true;
+            // af  does not requiers an output file name
+
 
         } else if (strcmp(argv[i], "-slice_domains") == 0) {
             if (i + 1 < argc) {
                 slice_sequence = true;
-                slice_filename = argv[i + 1];
-                i += 1; } // get the path to the slice file
+                slice_filename = argv[i + 1]; // get the path to the slice file
+                i += 1; } 
 
         } else if (strcmp(argv[i], "-minmax") == 0) {
             if (i + 2 < argc) {
                 calculate_minmax = true;
                 codon_usage_filename = argv[++i];   // table file
                 input_filename = argv[++i];         // fasta file
-
+                // minmax  does not requiers an output file name
                 // check if the next argument is a number (window size)
                 if (i + 1 < argc && isdigit(argv[i + 1][0])) {
                     window_size = atoi(argv[++i]);
@@ -1540,14 +1477,25 @@ int main(int argc, char *argv[]) {
         
         } else if (strcmp(argv[i], "-help") == 0) {
 
+            printf(
+            "                                  _   \n"
+            "                                 | |  \n"
+            "   ___ ___   ___ ___  _ __  _   _| |_ \n"
+            "  / __/ _ \\ / __/ _ \\| '_ \\| | | | __| \n"
+            " | (_| (_) | (_| (_) | | | | |_| | |_ \n"
+            "  \\___\\___/ \\___\\___/|_| |_|\\__,_|\\__|\n");
+            printf("   \t\n");
+            printf("Coconut: Codon Usage, Relative Synonymous CU, MinMax and AlphaFold pLDDT domain clasification\n");
+            printf("   \t\n");
             printf("Usage: %s [options] <file id> <input.fasta> [output]\n", argv[0]);
+            printf("   \t\n");
             printf("Options:\n");
             printf("   \t\n");
             printf("  -cu\tCalculate Codon Usage (CU)\n");
             printf("  -rscu\tCalculate Relative Synonymous Codon Usage (RSCU)\n");
             printf("  -all\tCalculate CU and RSCU\n");
             printf("   \t\n");
-            printf("  -silent\tHide outputs from the console\n");
+            printf("  -silent\tHide outputs from the console (errors are still shown)\n");
             printf("   \t\n");
             printf("  -fetch\tFetch sequence from Ensembl using transcript ID (ENST) (requires ENST ID and output file name)\n");
             printf("  -fetchfile\tFetch multiple sequences from a text file (requires fetchfile with an ENST list and output file name)\n");
@@ -1559,9 +1507,9 @@ int main(int argc, char *argv[]) {
             printf("  -slice_domains\tSlice fasta into domains using a CSV-style file (requires slice file name, works with input and all fetches)\n");
             printf("   \t\n");
             printf("  -minmax <codon_usage_file> [window_size]\tCalculate min-max percentage over specified window size (default 18).\n");
-            printf("\n");
-            printf("\n");
-            printf("\n");
+            printf("   \t\n");
+            printf("   \t\n");
+            printf("   \t\n");
             printf("Developed by Juan Mac Donagh at JGU and UNQ\n");
             printf("Contact: macjuan17@gmail.com\n");
             printf("GitHub Repo: https://github.com/Juanmacdonagh17/coconut_repo");
@@ -1583,13 +1531,30 @@ int main(int argc, char *argv[]) {
     // if you are NOT fetch but you are using a fasta, you need an input file name! 
     if ((!input_filename) && (!fetch_sequence && !fetch_from_file && !fetch_gene && !fetch_uniprot)) {
         fprintf(stderr, "Some stuff is missing! Input filename is required.\n Try -help to get all the parameters\n");
-         
+        fprintf(stderr, 
+        "          ___\n"
+        "   ???  c(-.-)o ???   (\n"
+        "    \\____( )___/   ___)\n"
+        "         / \\   ___(\n"
+        "         (_)___)\n"
+        "         w /|\n"
+        "         |  |\n"
+        "         m  m\n");
         return 1;
     }
 
     // check for output file in both fetch and normal input cases
-    if ((calculate_cu || calculate_rscu || slice_sequence || fetch_sequence || fetch_from_file || fetch_gene) && !output_filename) {
+    if ((calculate_cu || calculate_rscu || slice_sequence || fetch_sequence || fetch_from_file || fetch_gene || fetch_uniprot) && !output_filename) {
         fprintf(stderr, "Some stuff is missing! Output filename is required for the selected options.\n Try -help to get all the parameters\n");
+                fprintf(stderr, 
+        "          ___\n"
+        "   ???  c(-.-)o ???   (\n"
+        "    \\____( )___/   ___)\n"
+        "         / \\   ___(\n"
+        "         (_)___)\n"
+        "         w /|\n"
+        "         |  |\n"
+        "         m  m\n");
          
         return 1;
     }
@@ -1605,9 +1570,9 @@ int main(int argc, char *argv[]) {
     if (calculate_cu || calculate_rscu || slice_sequence || fetch_sequence || fetch_from_file || fetch_gene || fetch_uniprot) {
         output = fopen(output_filename, "w");
         if (!output) {
-            if (!silent) {
+            //if (!silent) {
                 fprintf(stderr, "Error opening output file: %s\n", output_filename);
-            }
+            //}
             return 1;
         }
 
@@ -1627,8 +1592,9 @@ int main(int argc, char *argv[]) {
         }
         // read codon usage data
         readCodonUsageData(codon_usage_filename);
-        printf("Codon usage data loaded successfully.\n");
-
+        if (!silent) {
+            printf("Codon usage data loaded successfully.\n");
+        }
         // generate output filename based on input_filename
         char *dot = strrchr(input_filename, '.');
         char *base_filename = NULL;
@@ -1672,7 +1638,7 @@ int main(int argc, char *argv[]) {
 
     // Now set up code exactly as if user did: -fetch ENSG -multi <output_file>
     fetch_sequence = true;
-    fetch_multi = true; // I only one of them to be true? 
+    //fetch_multi = true; // I only one of them to be true? 
     protein_id = ensgID;  // re-use the same pointer
 
     }
@@ -1686,19 +1652,9 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
-        // new af stuff, I put this here but also I could do it with a flag...
-
-        // int plddtCount = 0;
-        // float *plddtArray = NULL;
-        //float *plddtArray = getAlphaFoldPLDDTForUniprot(uniprot_id, &plddtCount);
-    // if (fetch_alphafold) {
-    //         plddtArray = getAlphaFoldPLDDTForUniprot(uniprot_id, &plddtCount);
-    //         if (!plddtArray) {
-    //             fprintf(stderr, "Warning: Could not retrieve pLDDT from AlphaFold for uniprot ID: %s\n", uniprot_id);
-    //         }
-    //     }
+    
 if (fetch_alphafold) {
-    // 1) Fetch the AlphaFold metadata JSON
+    // fetch the af metadata JSON
     char *metaJson = fetchAlphaFoldMetaJSON(uniprot_id); 
     char af_csv_name[512]; // 512 chars should be enough? 
 
@@ -1707,14 +1663,14 @@ if (fetch_alphafold) {
         fprintf(stderr, "Could not fetch AlphaFold JSON for UniProt: %s\n", uniprot_id);
         // handle error
     } else {
-        // 2) Parse out the "pdbUrl" from metaJson
+        // parse out the "pdbUrl" from metaJson
         char *pdbUrl = parseAlphaFoldPdbUrl(metaJson); 
         free(metaJson);
         if (!pdbUrl) {
             fprintf(stderr, "No pdbUrl in AlphaFold JSON for %s\n", uniprot_id);
             // handle error
         } else {
-            // 3) Now fetch the actual PDB file
+            // now fetch the actual PDB file
             char *pdbData = fetchAlphaFoldPDB(pdbUrl);
             free(pdbUrl);
             if (!pdbData) {
@@ -1728,7 +1684,7 @@ if (fetch_alphafold) {
                 if (!arr || nRes == 0) {
                     fprintf(stderr, "No CA residues parsed!\n");
                 } else {
-                    analyzeAndWriteFlexibleCSV(
+                    analyzeAndWriteFlexibleCSV( // this parameters are set. on a future update, a flag could be added to change them
                         arr, nRes,
                         70.0f, // pLDDT cutoff => 70
                         3,     // minFlexibleRun => 3
@@ -1738,7 +1694,9 @@ if (fetch_alphafold) {
   
                     );
                     free(arr);
-                    fprintf(stdout, "Wrote classification to %s.csv\n", af_csv_name);
+                    if (!silent) {
+                        fprintf(stdout, "Wrote classification to %s\n", af_csv_name);
+                        }
                     }
                 }
             }
@@ -1747,41 +1705,9 @@ if (fetch_alphafold) {
 
 
     fetch_sequence = true;
-    fetch_multi    = true;
-    protein_id     = ensgID;
+    //fetch_multi    = true; // skip this, as if you want 1 uniprot you don't want multiple versions of the transcript
+    protein_id     = ensgID; // ensgID, but actually it's the enstID :P
 
-    // if (plddtArray) {
-    //     // Decide how to write them:  // this should be upstairs, with all the functions, I'll leave it here for now :p 
-
-    //     char af_csv_name[512]; // 512 chars should be enough? 
-
-    //     snprintf(af_csv_name, sizeof(af_csv_name), "%s_pLDDT.csv", uniprot_id);
-
-    //     FILE *af_csv = fopen(af_csv_name, "w");
-    //     if (!af_csv) {
-    //         fprintf(stderr, "Error: could not open %s for writing pLDDT data.\n", af_csv_name);
-    //     } else {
-    //         fprintf(af_csv, "Residue,PLDDT\n");
-    //         for (int i = 0; i < plddtCount; i++) {
-    //             fprintf(af_csv, "%d,%.2f\n", i+1, plddtArray[i]);
-    //         }
-    //         fclose(af_csv);
-    //         fprintf(stdout, "AlphaFold pLDDT saved to %s\n", af_csv_name);
-    //     }
-
-    //     free(plddtArray);
-    //}
-            // Pdebugging the pLDDT stuff
-            //printf("\nAlphaFold pLDDT for %s (CA atoms only):\n", uniprot_id);
-            //for (int i = 0; i < plddtCount && i < 10; i++) {
-                // just print first 10 to not spam
-               // printf("Residue %d pLDDT= %.2f\n", i+1, plddtArray[i]);
-            //}
-            // printf("...(total CA count: %d)\n", plddtCount);
-            // free(plddtArray);
-
-        // we have "ENSG00000142192", do a multi fetch
-        
 
     }
 
@@ -1900,9 +1826,9 @@ if (fetch_alphafold) {
         // read sequences from a FASTA file
         FILE *input = fopen(input_filename, "r");
         if (!input) {
-            if (!silent) {
-                fprintf(stderr, "Failed to open input file: %s\n", input_filename);
-            }
+
+            fprintf(stderr, "Failed to open input file: %s\n", input_filename);
+
             fclose(output);
             return 1;
         }
@@ -1956,13 +1882,9 @@ if (fetch_alphafold) {
     }
 
     if (fetch_gene) {
-        free(protein_id);  // i.e. free(ensgID) that was stored there
+        free(protein_id);  
         protein_id = NULL;
     }
-    // this is not needed, as i don't use a malloc for the outputfile name (i think)
-    // if (output_filename) {
-    //     free(output_filename);
-    // }
 
     return 0;
 
