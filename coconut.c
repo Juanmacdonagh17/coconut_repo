@@ -92,7 +92,7 @@ typedef struct {
     float x, y, z;      // from columns 31..54
     float pLDDT;        // from columns 61..66
     int flexible;       // 1 = flexible, 0 = rigid
-    char classification[16]; // e.g. "rigid", "tail", "loop", "linker"
+    char classification[16]; // e.g. "rigid", "tail", "loop", "linker_idr"
 } CA_Residue;
 
 typedef struct {
@@ -523,7 +523,7 @@ static float dist(const CA_Residue *a, const CA_Residue *b) { // define dist, he
 
 CA_Residue* parsePDBforCA(const char *pdbData, int *count) {
 
-    // the human Titin has 34350 Aa, so 100000 should be enough for most proteins
+    // the human Titin has 34350 Aa, so 100000 should be more than enough 
 
     int capacity = 100000;
     CA_Residue *resArray = malloc(sizeof(CA_Residue)*capacity);
@@ -757,7 +757,7 @@ void analyzeAndWriteFlexibleCSV(
             // simple approach:
             // R_left is the rigid region that ends right before fr.startIdx (largest endIdx < start)
             // R_right is the rigid region that starts right after fr.endIdx (smallest startIdx > end)
-            // If none => tail. If both => check contact >= 10 => loop, else => linker
+            // If none => tail. If both => check contact >= 10 => loop, else => linker_idr
 
             // find R_left
             int leftIdx = -1; 
@@ -782,7 +782,7 @@ void analyzeAndWriteFlexibleCSV(
                 // entire protein is flexible except for some short rigid not meeting minRun => but we have rigidRegionCount > 0
                 // For simplicity, let's call it "linker" here.
                 for (int rr = fr.startIdx; rr <= fr.endIdx; rr++) {
-                    strcpy(res[rr].classification, "linker");
+                    strcpy(res[rr].classification, "linker_idr");
                 }
             } else if (leftIdx < 0 || rightIdx < 0) {
                 // it's at N-term or C-term => tail
@@ -800,7 +800,7 @@ void analyzeAndWriteFlexibleCSV(
                 } else {
                     // linker
                     for (int rr = fr.startIdx; rr <= fr.endIdx; rr++) {
-                        strcpy(res[rr].classification, "linker");
+                        strcpy(res[rr].classification, "linker_idr");
                     }
                 }
             }
