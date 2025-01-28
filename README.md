@@ -67,15 +67,15 @@ Using the -help flag will provide a list of all available commands, but here is 
 + -cu: calculates Codon Usage for an input fasta or multifasta or a fetched ENST.
 + -rscu: calculates Relative Synonimus Codon Usage for an input fasta or multifasta or a fetched ENST.
 + -all: calculates both CU and RSCU for an input fasta or multifasta or a fetched ENST.
-+ 
+
 + -fetch: fetches a transcript (specifically the main CDS) from Ensembl, using the transcript identifier.
-+-fetchfile: same as fetch, but using a list of identifiers from a file, one per line.
++ -fetchfile: same as fetch, but using a list of identifiers from a file, one per line.
 + -multi: fetches all versions of a transcript, using ENSG instead of ENST.
 + -gene: fetches all versions of a transcript using a species and gene symbol as inputs. 
-+ -uniprot: fetches all version of a transcript using the UniProt ID as an entry point.
-+ 
++ -uniprot: fetches the main version of a transcript using the UniProt ID as an entry point.
++ -af: fetches the pLDDT from the AF model, and it creates a naive structural assignation based on pLDDT and contacts from the PDB AF file.
 + -slice_domains: used to easily compare CU and RSCU between domains. It uses a file with "slice instructions" (find examples below, works with local files and with fetch).
-+ 
+
 + -minmax: calculates the %MinMax for an input fasta or multifasta. If not indicated otherwise, the window of comparison is 18 codons, but this can be changed. For this, a table of optimal use codons is needed. The table for _Homo Sapiens_ is provided.
 
 ---
