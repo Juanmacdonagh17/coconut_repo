@@ -142,10 +142,10 @@ And if you want to use a different window of codons:
 | AFDB integration for structural data        | ✅        |
 | AF structure classification                 | ✅        |
 | Fetch domains from InterPro or CATH         | ❌        |
-| MobiDB integration for disorder regions     | ❌        |
 | NW alignment method                         | ❌        |
-| Incorrect length error                      | ❔        |
-| Optional flags (no ATG, no STOP, etc)       | ❔        |
+| ~~MobiDB integration for disorder regions~~ | ❔        |
+| ~~Incorrect length error~~                  | ❔        |
+| ~~Optional flags (no ATG, no STOP, etc)~~   | ❔        |
                                                       
 ---
 
