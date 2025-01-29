@@ -6,7 +6,7 @@ Be aware of bugs, especially tyranids.***
 ![alt text](https://github.com/Juanmacdonagh17/coconut_repo/blob/main/logo/logo2.svg)
 
 # Coconut: 
-## A suite for transcripts & codon usage calculations
+## A suite for transcripts, codon usage and protein structure analysis.
 ---
 
 ### Introduction 
