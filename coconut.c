@@ -21,7 +21,7 @@
 #define CODON_LENGTH 3
 #define MAX_CODONS 64
 #define MAX_LINE_LENGTH 1024 // maybe play around with this, so it can take longer sequences?
-#define MAX_SEQUENCE_LENGTH 200000 
+#define MAX_SEQUENCE_LENGTH 200000  // this is only 200 kb!! 
 #define ID_LENGTH 512 // hopefully 512 is big enough, codonw tends to cut off the id
 #define API_URL_FORMAT "https://rest.ensembl.org/sequence/id/%s?object_type=transcript;type=cds;content-type=text/x-fasta"  // dynamic ID URL
 #define API_URL_FORMAT_MULT "https://rest.ensembl.org/sequence/id/%s?type=cds;content-type=text/x-fasta;multiple_sequences=1" // dynamic ID URL
@@ -92,7 +92,8 @@ typedef struct {
     float x, y, z;      // from columns 31..54
     float pLDDT;        // from columns 61..66
     int flexible;       // 1 = flexible, 0 = rigid
-    char classification[16]; // e.g. "rigid", "tail", "loop", "linker_idr"
+    char classification[16]; //  "rigid", "tail", "loop", "idr"
+    int contactCount;
 } CA_Residue;
 
 typedef struct {
@@ -599,6 +600,7 @@ CA_Residue* parsePDBforCA(const char *pdbData, int *count) {
                 resArray[n].pLDDT = plddtVal;
                 resArray[n].flexible = 0; // default
                 strcpy(resArray[n].classification, "unknown");
+                resArray[n].contactCount = 0;
                 n++;
             }
         }
@@ -608,6 +610,21 @@ CA_Residue* parsePDBforCA(const char *pdbData, int *count) {
     free(tmp);
     *count = n;
     return resArray;
+}
+
+
+void computeContactCounts(CA_Residue *arr, int n, float cutoff) {
+    for (int i = 0; i < n; i++) {
+        int count = 0;
+        for (int j = 0; j < n; j++) {
+            if (i == j) continue;
+            float d = dist(&arr[i], &arr[j]);
+            if (d <= cutoff) {
+                count++;
+            }
+        }
+        arr[i].contactCount = count;
+    }
 }
 
 static void classifyFlexibleRigid(CA_Residue *res, int n, float cutoff) {
@@ -757,7 +774,7 @@ void analyzeAndWriteFlexibleCSV(
             // simple approach:
             // R_left is the rigid region that ends right before fr.startIdx (largest endIdx < start)
             // R_right is the rigid region that starts right after fr.endIdx (smallest startIdx > end)
-            // If none => tail. If both => check contact >= 10 => loop, else => linker_idr
+            // If none => tail. If both => check contact >= 10 => loop, else => idr
 
             // find R_left
             int leftIdx = -1; 
@@ -782,7 +799,7 @@ void analyzeAndWriteFlexibleCSV(
                 // entire protein is flexible except for some short rigid not meeting minRun => but we have rigidRegionCount > 0
                 // For simplicity, let's call it "linker" here.
                 for (int rr = fr.startIdx; rr <= fr.endIdx; rr++) {
-                    strcpy(res[rr].classification, "linker_idr");
+                    strcpy(res[rr].classification, "idr");
                 }
             } else if (leftIdx < 0 || rightIdx < 0) {
                 // it's at N-term or C-term => tail
@@ -800,13 +817,16 @@ void analyzeAndWriteFlexibleCSV(
                 } else {
                     // linker
                     for (int rr = fr.startIdx; rr <= fr.endIdx; rr++) {
-                        strcpy(res[rr].classification, "linker_idr");
+                        strcpy(res[rr].classification, "idr");
                     }
                 }
             }
         }
     }
+    
+    computeContactCounts(res, n, contact_dist);
 
+    
     // CSV stuff
 
     FILE *fp = fopen(csvFilename, "w");
@@ -816,11 +836,12 @@ void analyzeAndWriteFlexibleCSV(
         free(rigidRegs); // free the memory from the regions
         return;
     }
-    fprintf(fp, "residue,pLDDT,classification\n");
+    fprintf(fp, "residue,pLDDT,contacts,classification\n");
     for (int i = 0; i < n; i++) {
-        fprintf(fp, "%d,%.2f,%s\n",
+        fprintf(fp, "%d,%.2f,%d,%s\n",
                 res[i].residueNumber,
                 res[i].pLDDT,
+                res[i].contactCount,
                 res[i].classification);
     }
     fclose(fp);
@@ -1604,7 +1625,7 @@ int main(int argc, char *argv[]) {
             base_filename = strdup(input_filename);
         }
         minmax_output_filename  = malloc(strlen(base_filename) + 13); // '_minmax.out' + null terminator
-        sprintf(minmax_output_filename, "%s_minmax.out", base_filename);
+        sprintf(minmax_output_filename, "%s_minmax.csv", base_filename);
         free(base_filename);
 
         // Open the output file to write the header
