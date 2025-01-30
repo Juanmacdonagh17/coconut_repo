@@ -98,6 +98,12 @@ And for a single file:
 ```bash
 ./coconut -rscu -silent -fetch ENST00000361390 ENST00000361390.csv
 ```
+Fetching an UniProt and the AlphaFold model:
+
+```bash
+./coconut -all -af -uniprot P05067 aa.csv
+```
+
 To use the slice function (an example slice.csv is provided to show how the file needs to look like):
 
 ```bash
