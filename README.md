@@ -98,10 +98,16 @@ And for a single file:
 ```bash
 ./coconut -rscu -silent -fetch ENST00000361390 ENST00000361390.csv
 ```
-Fetching an UniProt and the AlphaFold model:
+Fetching an UniProt and the AlphaFold model (this also creates a file with pLDDT, contacts and a naive domain classification):
 
 ```bash
 ./coconut -all -af -uniprot P05067 aa.csv
+```
+
+To perform cu/rscu over the AF domain regions:
+
+```bash
+./coconut -cu -af_regions -uniprot O95905 O95905.csv
 ```
 
 To use the slice function (an example slice.csv is provided to show how the file needs to look like):
@@ -125,6 +131,11 @@ And if you want to use a different window of codons:
 ./coconut -minmax  Usage-num3.man 10 multi_cds.fasta
 ```
 
+If you want to perform the RRT over the sequence:
+
+```bash
+./coconut -rtt -minmax Usage-num3.man ENST00000372979
+```
 ---
 
 ### Progress: 
@@ -147,11 +158,14 @@ And if you want to use a different window of codons:
 | UniProt as entry point for request          | ✅        |
 | AFDB integration for structural data        | ✅        |
 | AF structure classification                 | ✅        |
-| Fetch domains from InterPro or CATH         | ❌        |
-| NW alignment method                         | ❌        |
-| ~~MobiDB integration for disorder regions~~ | ❔        |
-| ~~Incorrect length error~~                  | ❔        |
-| ~~Optional flags (no ATG, no STOP, etc)~~   | ❔        |
+| Calculate Codon Adaptation Index            | ✅        |
+| Perform RRT over the %MinMax                | ✅        |
+| Perform CU/RSCU over AF domain classifiation| ✅        |
+| Fetch domains from InterPro or CATH         | ❔        |
+| ~~NW alignment method~~                     | ❌        |
+| ~~MobiDB integration for disorder regions~~ | ❌        |
+| ~~Incorrect length error~~                  | ❌        |
+| ~~Optional flags (no ATG, no STOP, etc)~~   | ❌        |
                                                       
 ---
 
