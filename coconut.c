@@ -25,7 +25,9 @@
 #define ID_LENGTH 512 // hopefully 512 is big enough, codonw tends to cut off the id
 #define API_URL_FORMAT "https://rest.ensembl.org/sequence/id/%s?object_type=transcript;type=cds;content-type=text/x-fasta"  // dynamic ID URL
 #define API_URL_FORMAT_MULT "https://rest.ensembl.org/sequence/id/%s?type=cds;content-type=text/x-fasta;multiple_sequences=1" // dynamic ID URL
+#define MAX_CAI_ENTRIES 100 // maybe 100 is a lot 
 // there are some values down the pipeline that should be added here, the the af and uniprot fetches
+
 
 
 /////////////////////////
@@ -101,6 +103,13 @@ typedef struct {
     int endIdx;
 } Region;
 
+typedef struct {
+    char codon[4];      
+    float frequency;     
+    float weight;        // relative adaptiveness (fi / max{fj} for same amino acid)
+} Codon_Ref_CAI;
+
+Codon_Ref_CAI global_cai_table[MAX_CAI_ENTRIES];
 
 // 64 codons
 const char* codons[MAX_CODONS] = { 
@@ -234,8 +243,8 @@ char* fetchGeneID(const char *species, const char *geneName) {
     curl_easy_cleanup(curl_handle);
     curl_global_cleanup();
 
-    // this is a very home made approach, i should check other ways to parse the json
-    // i just look for the type gene and then the id
+    /* this is a very home made approach, i should check other ways to parse the json
+     i just look for the type gene and then the id */
 
     char *json_response = chunk.memory;
     char *gene_tag = strstr(json_response, "\"type\":\"gene\"");
@@ -326,25 +335,25 @@ char* fetchEnsemblGeneFromUniProt(const char *uniprot_id) {
     // just in case, debbuging 
     //fprintf(stderr, "[DEBUG] Full JSON:\n%s\n", chunk.memory);
 
-    //  naive scanning for: "key":"GeneId", also here the json parsing is "by hand", maybe a library is better? 
-    // something like: "key":"GeneId","value":"ENSG00000142192.22"
-    // this can be switched to look for the ENSG instead of the ENST, but it makes less sense, as you have 1 protein, 1 af model, you would want 1 transcript
-    // in the json: 
-    // {
-    //   "entryType": "UniProtKB reviewed (Swiss-Prot)",
-    //   "primaryAccession": "P04637",
-    //   "uniProtKBCrossReferences": [
-    //     {
-    //       "database": "Ensembl",
-    //       "id": "ENST00000269305.9", // i look for this
-    //       "properties": [
-    //         {
-    //           "key": "ProteinId",
-    //           "value": "ENSP00000269305.4"
-    //         },
-    //         {
-    //           "key": "GeneId",
-    //           "value": "ENSG00000141510.19" // instead of this , but with a few changes it could be done
+    /*  naive scanning for: "key":"GeneId", also here the json parsing is "by hand", maybe a library is better? 
+     something like: "key":"GeneId","value":"ENSG00000142192.22"
+     this can be switched to look for the ENSG instead of the ENST, but it makes less sense, as you have 1 protein, 1 af model, you would want 1 transcript
+     in the json: 
+     {
+       "entryType": "UniProtKB reviewed (Swiss-Prot)",
+       "primaryAccession": "P04637",
+       "uniProtKBCrossReferences": [
+         {
+           "database": "Ensembl",
+           "id": "ENST00000269305.9", // i look for this
+           "properties": [
+             {
+               "key": "ProteinId",
+               "value": "ENSP00000269305.4"
+             },
+             {
+               "key": "GeneId",
+             "value": "ENSG00000141510.19" // instead of this , but with a few changes it could be done */ 
 
     char *gene_tag = strstr(chunk.memory, "\"database\":\"Ensembl\""); //"\"key\":\"GeneId\"");
     if (!gene_tag) {
@@ -770,11 +779,11 @@ void analyzeAndWriteFlexibleCSV(
             Region fr = flexRegs[i];
             // check if it has no rigid on the left => tail if startIdx > 0
 
-            //  find the nearest rigid region on the left and right
-            // simple approach:
-            // R_left is the rigid region that ends right before fr.startIdx (largest endIdx < start)
-            // R_right is the rigid region that starts right after fr.endIdx (smallest startIdx > end)
-            // If none => tail. If both => check contact >= 10 => loop, else => idr
+            /*  find the nearest rigid region on the left and right
+             simple approach:
+             R_left is the rigid region that ends right before fr.startIdx (largest endIdx < start)
+             R_right is the rigid region that starts right after fr.endIdx (smallest startIdx > end)
+             If none => tail. If both => check contact >= 10 => loop, else => idr */
 
             // find R_left
             int leftIdx = -1; 
@@ -850,6 +859,60 @@ void analyzeAndWriteFlexibleCSV(
     free(rigidRegs); // free the memory from the regions
 }
 
+
+/* in case you want to generate a file in the style of "slice instructions"
+   here's a function that can do that and should be integratated later in the pipeline */
+
+void writeRegionSlices(CA_Residue *res, int n, const char *seqID, const char *sliceOutputFilename) {
+    FILE *fp = fopen(sliceOutputFilename, "w"); 
+    if (!fp) {
+        fprintf(stderr, "Error opening region slices file: %s\n", sliceOutputFilename);
+        return;
+    }
+    
+    //fprintf(fp, "ID,Region,Range\n"); // better not use this, as the slice file does not have a header
+
+    // counters for each type to number regions
+    int tailCount = 0, rigidCount = 0, loopCount = 0, idrCount = 0;
+    // use the residueNumber from the first residue as the start of the first region.
+    
+    int regionStart = res[0].residueNumber;
+    char currentClass[16];
+    strcpy(currentClass, res[0].classification);
+
+    // Iterate over residues (plus one extra iteration to flush out the last region)
+    for (int i = 1; i <= n; i++) {
+        // when we hit the end of the array or the classification changes...
+        if (i == n || strcmp(res[i].classification, currentClass) != 0) {
+            int regionEnd = res[i - 1].residueNumber; // end of the current region
+            char regionLabel[32];
+            if (strcmp(currentClass, "tail") == 0) {
+                tailCount++; // sum 1 for each "tail" tag, same for the others
+                sprintf(regionLabel, "tail_%d", tailCount);
+            } else if (strcmp(currentClass, "rigid") == 0) {
+                rigidCount++;
+                sprintf(regionLabel, "rigid_%d", rigidCount);
+            } else if (strcmp(currentClass, "loop") == 0) {
+                loopCount++;
+                sprintf(regionLabel, "loop_%d", loopCount);
+            } else if (strcmp(currentClass, "idr") == 0) {
+                idrCount++;
+                sprintf(regionLabel, "idr_%d", idrCount);
+            } else {
+                // fallback: use the classification itself
+                strcpy(regionLabel, currentClass);
+            }
+            fprintf(fp, "%s,%s,%d:%d\n", seqID, regionLabel, regionStart, regionEnd);
+            // if not at the end, update for the next region:
+            if (i < n) {
+                regionStart = res[i].residueNumber;
+                strcpy(currentClass, res[i].classification);
+            }
+        }
+    }
+    fclose(fp);
+}
+
 ////////////////////////
 // index functions:   //
 ////////////////////////
@@ -866,17 +929,17 @@ int getAminoAcidIndex(char* codon) {
                 return 25; // use 25 as a special index for stop codons
             }
             
-            // if a match is found, compute the index:
-            // subtract 'A' from the corresponding amino acid character to get an index.
-            // this index is calculated based on the position of the amino acid character in the alphabet,
-            // where 'A' is 0, 'B' is 1, ..., 'Z' is 25.
+            /* if a match is found, compute the index:
+               subtract 'A' from the corresponding amino acid character to get an index.
+               this index is calculated based on the position of the amino acid character in the alphabet,
+               where 'A' is 0, 'B' is 1, ..., 'Z' is 25. */
             
             return amino_acids[i] - 'A';  
             
         }
     }
     return -1; // error case if codon not found <- also this, I should try some wierd sequences.
-               // also I think the handeling of the N's and the "weird" nt should be here ?  // 
+               // also I think the handeling of the N's and the "weird" nt should be here ?  
                // at the countCodons functions the "N" are ignored
 }
 
@@ -1096,6 +1159,241 @@ void calculateMinMax(SequenceCodonCounts *seq, int window_size, const char *minm
     fclose(minmax_output);
 }
 
+// RTT functions 
+
+char *generateRRTSequence(const char *sequence, Codon_Ref_CAI *table, int nTable) { // be aware that this is using the CAI table, not the table from the minmax
+    int len = strlen(sequence);
+    int numCodons = len / 3;
+    char *rrt = malloc(len + 1); // just alocate the same length as the input sequence for memory
+    if (!rrt) return NULL;
+    for (int i = 0; i < numCodons; i++) {
+        char originalCodon[4];
+        strncpy(originalCodon, sequence + i * 3, 3);
+        originalCodon[3] = '\0';
+        //  'T' to 'U' if needed, but all sequences should have T's from the get go
+        for (int k = 0; k < 3; k++) {
+            if (originalCodon[k] == 'T') originalCodon[k] = 'U';
+        }
+        // determine the aa for the codon using the same old method as before
+        char aa = '?';
+        for (int j = 0; j < MAX_CODONS; j++) {
+            if (strcmp(codons[j], originalCodon) == 0) {
+                aa = amino_acids[j];
+                break;
+            }
+        }
+        // accumulate the total weight for all codons in the table that encode aa.
+        float totalWeight = 0.0f;
+        for (int j = 0; j < nTable; j++) {
+            //  getAminoAcid to determine the amino acid encoded by table[j].codon.
+            char tableAA = '?';
+            for (int k = 0; k < MAX_CODONS; k++) {
+                if (strcmp(codons[k], table[j].codon) == 0) {
+                    tableAA = amino_acids[k];
+                    break;
+                }
+            }
+            if (tableAA == aa) {
+                totalWeight += table[j].weight;
+            }
+        }
+        // choose a random number between 0 and totalWeight, this part is f u n k y 
+        float r = ((float)rand() / (float)RAND_MAX) * totalWeight;
+        float cumulative = 0.0f;
+        char selectedCodon[4] = "";
+        for (int j = 0; j < nTable; j++) {
+            char tableAA = '?';
+            for (int k = 0; k < MAX_CODONS; k++) {
+                if (strcmp(codons[k], table[j].codon) == 0) {
+                    tableAA = amino_acids[k];
+                    break;
+                }
+            }
+            if (tableAA == aa) {
+                cumulative += table[j].weight;
+                if (r <= cumulative) {
+                    strcpy(selectedCodon, table[j].codon);
+                    break;
+                }
+            }
+        }
+        // if nothing was selected, use the original codon
+        if (selectedCodon[0] == '\0')
+            strcpy(selectedCodon, originalCodon);
+        strncpy(rrt + i * 3, selectedCodon, 3);
+    }
+    rrt[len] = '\0';
+    return rrt;
+}
+// this is the same (or should be) as the minmax function, but with the RRT sequence
+
+float* computeMinMaxProfile(const char *sequence, int window_size, int *profileLength) { 
+    int len = strlen(sequence);
+    int numCodons = len / 3;
+    int nWindows = numCodons - window_size + 1;
+    *profileLength = nWindows;
+    float *profile = malloc(nWindows * sizeof(float));
+    if (!profile) return NULL;
+    for (int j = 0; j < nWindows; j++) {
+        float sumusage = 0.0f, summax = 0.0f, summin = 0.0f, sumave = 0.0f;
+        int valid_codons = 0;
+        for (int k = 0; k < window_size; k++) {
+            int idx = j + k;
+            char codon[CODON_LENGTH + 1];
+            strncpy(codon, sequence + idx * CODON_LENGTH, CODON_LENGTH);
+            codon[CODON_LENGTH] = '\0';
+            if (strchr(codon, 'N') != NULL) continue;
+            int idx_i, idx_j, idx_k;
+            getCodonIndices(codon, &idx_i, &idx_j, &idx_k);
+            if (idx_i >= 0 && idx_j >= 0 && idx_k >= 0) {
+                CodonUsageStats stats = codon_usage_stats[idx_i][idx_j][idx_k];
+                if (stats.amino_acid_index < 1000) {
+                    sumusage += stats.usage;
+                    summax += stats.max;
+                    summin += stats.min;
+                    sumave += stats.ave;
+                    valid_codons++;
+                }
+            }
+        }
+        if (valid_codons == 0) {
+            profile[j] = 0.0f;
+        } else {
+            sumusage /= valid_codons;
+            summax /= valid_codons;
+            summin /= valid_codons;
+            sumave /= valid_codons;
+            float minmax_percent = 0.0f;
+            if (sumusage > sumave && (summax - sumave) != 0)
+                minmax_percent = (sumusage - sumave) / (summax - sumave) * 100.0f;
+            else if (sumusage < sumave && (sumave - summin) != 0)
+                minmax_percent = - (sumave - sumusage) / (sumave - summin) * 100.0f;
+            profile[j] = minmax_percent;
+        }
+    }
+    return profile;
+}
+
+// here we just call the RRT sequence generator and the minmax profile calculator
+
+float* computeRRTMinMaxProfile(const char *sequence, Codon_Ref_CAI *table, int nTable, int window_size, int iterations, int *profileLength) {
+    int len = strlen(sequence);
+    int numCodons = len / 3;
+    int nWindows = numCodons - window_size + 1;
+    *profileLength = nWindows;
+    float *accumulatedProfile = calloc(nWindows, sizeof(float));
+    if (!accumulatedProfile) return NULL;
+    for (int iter = 0; iter < iterations; iter++) {
+        char *rrtSeq = generateRRTSequence(sequence, table, nTable);
+        if (!rrtSeq) continue;
+        int profLen = 0;
+        float *profile = computeMinMaxProfile(rrtSeq, window_size, &profLen);
+        free(rrtSeq);
+        if (!profile) continue;
+        for (int i = 0; i < nWindows; i++) {
+            accumulatedProfile[i] += profile[i];
+        }
+        free(profile);
+    }
+    for (int i = 0; i < nWindows; i++) {
+        accumulatedProfile[i] /= iterations;
+    }
+    return accumulatedProfile;
+}
+
+////////////////////////
+// CAI functions:     //
+////////////////////////
+
+// load the CAI reference table from a file
+int loadCAIReference(const char *filename, Codon_Ref_CAI *table, int max_entries) {
+    FILE *fp = fopen(filename, "r");
+    if (!fp) {
+        fprintf(stderr, "Error opening CAI reference file: %s\n", filename);
+        return -1;
+    }
+    int count = 0;
+    char codon[4];
+    char freqToken[32];
+    while (fscanf(fp, "%3s %31s", codon, freqToken) == 2 && count < max_entries) {
+        strcpy(table[count].codon, codon);
+        float freq;
+        /* Parse the frequency up to the parenthesis.
+           For example, freqToken might be "17.6(714298)" */
+        sscanf(freqToken, "%f", &freq);
+        table[count].frequency = freq;
+        count++;
+    }
+    fclose(fp);
+    return count;
+}
+
+/* compute relative adaptiveness weight for each codon in the table
+   for each amino acid, find the maximum frequency among its codons, then set:
+   weight = frequency / max_frequency */
+
+void computeRelativeAdaptiveness(Codon_Ref_CAI *table, int n) {
+    for (int i = 0; i < n; i++) {
+        char aa = getAminoAcidIndex(table[i].codon);
+        float maxFreq = 0;
+        for (int j = 0; j < n; j++) {
+            if (getAminoAcidIndex(table[j].codon) == aa) {
+                if (table[j].frequency > maxFreq)
+                    maxFreq = table[j].frequency;
+            }
+        }
+        table[i].weight = (maxFreq > 0) ? table[i].frequency / maxFreq : 0;
+    }
+}
+
+/* given a transcript sequence (DNA), compute its CAI.
+   (T's will be converted to U's).
+   it is read in triplets (codons). for each codon, lookup the weight from the table.
+   CAI = exp((1/L) * sum(log(w_i))) for all codons i in the gene.
+*/
+float computeCAI(const char *sequence, Codon_Ref_CAI *table, int nTable) {
+    int len = strlen(sequence);
+    int L = len / 3;
+    if (L == 0) return 0;
+    double sumLog = 0.0;
+    int count = 0;
+    for (int i = 0; i < len - 2; i += 3) {
+        char codon[4];
+        codon[0] = toupper(sequence[i]);
+        codon[1] = toupper(sequence[i+1]);
+        codon[2] = toupper(sequence[i+2]);
+        codon[3] = '\0';
+        /* Convert T to U */
+        for (int k = 0; k < 3; k++) {
+            if (codon[k] == 'T') codon[k] = 'U';
+        }
+        float w = 0.0;
+        for (int j = 0; j < nTable; j++) {
+            if (strcmp(codon, table[j].codon) == 0) {
+                w = table[j].weight;
+                break;
+            }
+        }
+        if (w <= 0) continue;
+        sumLog += log(w);
+        count++;
+    }
+    if (count == 0) return 0;
+    double avgLog = sumLog / count;
+    return exp(avgLog);
+}
+
+void writeCaiCSV(const char *cai_output_filename, const char *sequence_id, const char *sequence,
+                 Codon_Ref_CAI *table, int nTable) {
+    float cai = computeCAI(sequence, table, nTable);
+    FILE *fp = fopen(cai_output_filename, "a");
+    if (!fp) {
+        fprintf(stderr, "Error opening CAI output file: %s\n", cai_output_filename);
+        return;
+    }
+    fprintf(fp, "%s,%.4f\n", sequence_id, cai);
+    fclose(fp);
+}
 
 ////////////////////////
 // CSV functions:     //
@@ -1196,9 +1494,9 @@ void parseSliceFile(const char *filename, SliceInstruction **instructions, int *
     *count = instr_count;
 }
 
-// be aware that you need to select the # of codon (that is also the corresponding position of the Aa in the sequence!)
-// a sequence that has 30 nt, has 10 codons, and so 10 Aa. If you use "30" for the last Aa, it will raise an out of bounds error
-// maybe add a flag for this?
+/* be aware that you need to select the # of codon (that is also the corresponding position of the Aa in the sequence!)
+   a sequence that has 30 nt, has 10 codons, and so 10 Aa. If you use "30" for the last Aa, it will raise an out of bounds error
+   maybe add a flag for this? */
 
 void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructions, int instr_count, FILE *output, bool calculate_cu, bool calculate_rscu, bool silent, bool calculate_minmax, int window_size, const char *output_filename) {    for (int i = 0; i < instr_count; i++) {
         if (strcmp(seq->id, instructions[i].transcript_id) == 0) {
@@ -1256,11 +1554,78 @@ void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructi
 
             // free the allocated memory for sliced_sequence
             free(sliced_sequence);
-            } else {
-                printf("No match for Slice Instruction %d: Transcript_ID=%s with Sequence ID=%s\nRemember that ID's should match between files!!!!\n", i, instructions[i].transcript_id, seq->id);
+            } else  if ((strcmp(seq->id, instructions[i].transcript_id) != 0)){
+                //printf("trying to match");
+
+                   char tempID[ID_LENGTH];
+                    strncpy(tempID, seq->id, ID_LENGTH - 1);
+                    tempID[ID_LENGTH - 1] = '\0';
+                    // Remove version info if present
+                    char *dotPtr = strchr(tempID, '.');
+                    if (dotPtr) {
+                        *dotPtr = '\0';
+                    }
+                    if (strcmp(tempID, instructions[i].transcript_id) == 0) {
+                        // Matching: do your slicing
+                        printf("Matched Slice Instruction %d: Transcript_ID=%s\n", i, instructions[i].transcript_id);
+
+                        int start_pos = instructions[i].start * CODON_LENGTH;
+                        int end_pos = instructions[i].end * CODON_LENGTH;
+
+                        printf("Slicing: %s from %d to %d, positions %d to %d\n", 
+                                instructions[i].transcript_id, instructions[i].start + 1, instructions[i].end + 1, start_pos, end_pos);
+
+                        // Validate slice bounds...
+                        if (start_pos < 0 || end_pos > (int)strlen(seq->sequence) || start_pos >= end_pos) {
+                            fprintf(stderr, "Invalid slicing bounds for %s: start=%d, end=%d\n",
+                                    seq->id, instructions[i].start + 1, instructions[i].end + 1);
+                            continue;
+                        }
+
+                        int slice_length = end_pos - start_pos;
+                        if (slice_length <= 0) {
+                            fprintf(stderr, "Invalid slice length for %s\n", instructions[i].domain_name);
+                            continue;
+                        }
+
+                        // Allocate memory for the sliced sequence
+                        char *sliced_sequence = malloc(slice_length + 1);
+                        if (!sliced_sequence) {
+                            fprintf(stderr, "Memory allocation failed for sliced_sequence\n");
+                            continue;
+                        }
+
+                        strncpy(sliced_sequence, seq->sequence + start_pos, slice_length);
+                        sliced_sequence[slice_length] = '\0';
+                        printf("Sliced sequence: %s\n", sliced_sequence);
+                        printf("\n");
+
+                        // Process the sliced sequence as before
+                        SequenceCodonCounts slicedSeq;
+                        initializeCodonCounts(&slicedSeq);
+                        strncpy(slicedSeq.id, instructions[i].domain_name, sizeof(slicedSeq.id) - 1);
+                        slicedSeq.id[sizeof(slicedSeq.id) - 1] = '\0';
+                        strncpy(slicedSeq.sequence, sliced_sequence, sizeof(slicedSeq.sequence) - 1);
+                        slicedSeq.sequence[sizeof(slicedSeq.sequence) - 1] = '\0';
+
+                        countCodons(sliced_sequence, &slicedSeq, false);
+
+                        if (calculate_cu) {
+                            calculateCU(&slicedSeq);
+                        }
+                        if (calculate_rscu) {
+                            calculateRSCU(&slicedSeq);
+                        }
+
+                        writeCsvRow(output, &slicedSeq, calculate_cu, calculate_rscu);
+
+                        free(sliced_sequence);
         
+                } else {
+                        printf("No match for Slice Instruction %d: Transcript_ID=%s with Sequence ID=%s\nRemember that ID's should match between files!!!!\n", i, instructions[i].transcript_id, seq->id);
+                }
+            }
         }
-    }
 }
 
 ////////////////////////
@@ -1270,7 +1635,10 @@ void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructi
 void processSequence(const char *sequence_data, const char *sequence_id, FILE *output, 
                      bool calculate_cu, bool calculate_rscu, bool calculate_minmax, 
                      int window_size, const char *output_filename, const char *minmax_output_filename,
-                     bool silent, bool slice_sequence, const char *slice_filename) {
+                     bool silent, bool slice_sequence, const char *slice_filename, 
+                     bool calculate_cai, const char *cai_output_filename, const char *cai_reference_filename, Codon_Ref_CAI *cai_table, int n_cai_table,
+                     bool calculate_rtt) {
+
     // initialize sequence structure
     SequenceCodonCounts currentSequence;
     initializeCodonCounts(&currentSequence);
@@ -1307,15 +1675,64 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
 
     // perform min-max calculations
     if (calculate_minmax) {
-       // char minmax_output_filename[1024];
-        //printf("Minmax output filename: %s\n", minmax_output_filename);
 
-        // HERE there are some issues with how the output file is named. 
-
-       // snprintf(minmax_output_filename, sizeof(minmax_output_filename), "%s_minmax.out", currentSequence.id);
-       // calculateMinMax(&currentSequence, window_size, minmax_output_filename);
         calculateMinMax(&currentSequence, window_size, minmax_output_filename);
 
+        if (calculate_rtt) {
+            
+            // because this is here, I can't really use the silent flag to skip the output text 
+            fprintf(stdout, "Calculating RRT minmax profile for %s\n", minmax_output_filename);
+            // Specify how many iterations you want (e.g., 200)
+            int iterations = 1000;
+            int rrtProfileLength = 0;
+            char *rrt_output_filename = malloc(strlen(minmax_output_filename) + 5);
+            float *rrtProfile = computeRRTMinMaxProfile(currentSequence.sequence, global_cai_table, n_cai_table, window_size, iterations, &rrtProfileLength);
+            if (!rrtProfile) {
+                fprintf(stderr, "Error computing RRT minmax profile.\n");
+            } else {
+                sprintf(rrt_output_filename, "rrt_%s", minmax_output_filename);
+                // Write the profile to a file
+                FILE *fp = fopen(rrt_output_filename, "w");
+                if (!fp) {
+                    fprintf(stderr, "Error opening RRT output file: %s\n", "rrt_output_filename.csv");
+                } else {
+                    fprintf(fp, "position,AvgMinMax\n");
+                    for (int i = 0; i < rrtProfileLength; i++) {
+                        // Optionally, compute the residue number corresponding to window i
+                        int aa_index = i + 1;
+                        fprintf(fp, "%d,%.2f\n", aa_index, rrtProfile[i]);
+                    }
+                    fclose(fp);
+                }
+                free(rrtProfile);
+                // fprintf(stdout, "Done!\n");
+            }
+        }
+
+    }
+
+    if (calculate_cai) {
+
+
+        n_cai_table = loadCAIReference(cai_reference_filename, global_cai_table, MAX_CAI_ENTRIES);
+        if (n_cai_table < 0) {
+            fprintf(stderr, "Error loading CAI reference file\n");
+            exit(1);
+        }
+        computeRelativeAdaptiveness(global_cai_table, n_cai_table);
+       
+        static bool cai_header_written = false;
+        FILE *fp = fopen(cai_output_filename, cai_header_written ? "a" : "w"); // open in append mode if header has been written
+        if (!fp) {
+            fprintf(stderr, "Error opening CAI output file: %s\n", cai_output_filename);
+        } else {
+            if (!cai_header_written) {
+                fprintf(fp, "id,CAI\n");
+                cai_header_written = true;
+            }
+            fclose(fp);
+        }
+        writeCaiCSV(cai_output_filename, currentSequence.id, currentSequence.sequence, global_cai_table, n_cai_table);
     }
 
     // slicing functionality
@@ -1374,21 +1791,25 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
 ////////////////////////
 
 int main(int argc, char *argv[]) {
-    bool calculate_cu = false;              // calculate codon usage
-    bool calculate_rscu = false;           // calculate relative codon usage
-    bool silent = false;                  // silent flag so you don't get all the printf or fprintf:
-    bool fetch_sequence = false;         // fetch a sequence from ENSEMBL
-    bool fetch_from_file = false;       // fetch from a file with a list of IDs
-    bool slice_sequence = false;       // slice sequences into domains
-    bool calculate_minmax = false;    // calculate %minmax
-    bool fetch_multi = false;        // multiple versions of a transcript
-    bool fetch_gene = false;        // using a gene name instead of an ENSEMBL gene ID
-    bool fetch_uniprot = false;    // fetch from IniProt
-    bool fetch_alphafold = false; // fetch pLDDT from AlphaFold
-
+    bool calculate_cu = false;                // calculate codon usage
+    bool calculate_rscu = false;             // calculate relative codon usage
+    bool silent = false;                    // silent flag so you don't get all the printf or fprintf:
+    bool fetch_sequence = false;           // fetch a sequence from ENSEMBL
+    bool fetch_from_file = false;         // fetch from a file with a list of IDs
+    bool slice_sequence = false;         // slice sequences into domains
+    bool calculate_minmax = false;      // calculate %minmax
+    bool fetch_multi = false;          // multiple versions of a transcript
+    bool fetch_gene = false;          // using a gene name instead of an ENSEMBL gene ID
+    bool fetch_uniprot = false;      // fetch from IniProt
+    bool fetch_alphafold = false;   // fetch pLDDT from AlphaFold
+    bool calculate_cai = false;    // calculate CAI
+    bool slice_alphafold = false; // slice af regions to a file 
+    bool calculate_rtt = false;  // calculate random reverse translations
 
     int window_size = 18;      // default window size for minmax
     int slice_count = 0;      // number of slice instructions starts at 0
+    int n_cai_table = 0;
+    int n_rtt = 1000;       // default number of random reverse translations, but i should try a lot more 
 
     char *codon_usage_filename = NULL;
     char *slice_filename = NULL;  
@@ -1401,13 +1822,16 @@ int main(int argc, char *argv[]) {
     char *gene_name = NULL;
     char *uniprot_id = NULL;
 
+    char *cai_reference_filename = NULL; // CAI reference table
+    char *cai_output_filename = NULL; // CAI output filename
+
     // variable declarations for slicing
     SliceInstruction *instructions = NULL;
+   
 
-
-    // the order for the inputs and outputs files is a bit tricky. If there's something out of place, it would name the ouptut as the slice file, etc etc
-    // maybe I should add a flag for the output file?
-    // it should be exremly clear on the help file 
+    /* the order for the inputs and outputs files is a bit tricky. If there's something out of place, it would name the ouptut as the slice file, etc etc
+       maybe I should add a flag for the output file?
+       it should be exremly clear on the help file  */
 
     for (int i = 1; i < argc; i++) {
 
@@ -1420,6 +1844,29 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[i], "-all") == 0) {
             calculate_cu = true;
             calculate_rscu = true;
+
+
+        // } else if (strcmp(argv[i], "-cai") == 0) {
+        //     calculate_cai = true;
+        //     // output file for CAI
+        //     if (i + 2 < argc) {
+        //         cai_reference_filename = argv[i + 1]; // CAI reference table
+        //         cai_output_filename = argv[i + 2];
+        //         i += 2;
+        //     } else {
+        //         fprintf(stderr, "Error: -cai requires a reference table file\n");
+        //         return 1;
+        //     }  
+
+        } else if (strcmp(argv[i], "-cai") == 0) {
+            calculate_cai = true;
+            cai_output_filename = argv[++i]; // output file for CAI
+            if (i + 1 < argc) {
+                cai_reference_filename = argv[++i]; // CAI reference table
+            } else {
+                fprintf(stderr, "Error: -cai requires a reference table file\n");
+                return 1;
+            }
             
         } else if (strcmp(argv[i], "-silent") == 0) {
             silent = true;  // silent mode
@@ -1468,7 +1915,10 @@ int main(int argc, char *argv[]) {
 
             fetch_alphafold = true;
             // af  does not requiers an output file name
+        } else if (strcmp(argv[i], "-af_regions") == 0) {
 
+            fetch_alphafold = true;
+            slice_alphafold = true;
 
         } else if (strcmp(argv[i], "-slice_domains") == 0) {
             if (i + 1 < argc) {
@@ -1495,7 +1945,10 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
 
-        
+        } else if (strcmp(argv[i], "-rtt") == 0) {
+            calculate_rtt = true;
+
+
         } else if (strcmp(argv[i], "-help") == 0) {
 
             printf(
@@ -1515,26 +1968,29 @@ int main(int argc, char *argv[]) {
             printf("  -cu\tCalculate Codon Usage (CU)\n");
             printf("  -rscu\tCalculate Relative Synonymous Codon Usage (RSCU)\n");
             printf("  -all\tCalculate CU and RSCU\n");
+            printf("  -cai\tCalculate Codon Adaptation Index, CAI (requieres a table of codon usage per organisims)\n");
             printf("   \t\n");
             printf("  -silent\tHide outputs from the console (errors are still shown)\n");
             printf("   \t\n");
             printf("  -fetch\tFetch sequence from Ensembl using transcript ID (ENST) (requires ENST ID and output file name)\n");
             printf("  -fetchfile\tFetch multiple sequences from a text file (requires fetchfile with an ENST list and output file name)\n");
             printf("  -multi\tFetch all versions of each transcript from a text file or single ID (ENSG, no ENST)\n");
-            printf("  -gene\tFetch all versions of each transcript using species and gene symbol\n");
+            printf("  -gene \tFetch all versions of each transcript using species and gene symbol\n");
             printf("  -uniprot\tFetch sequence from UniProt using UniProt ID\n");
-            printf("  -af\tFetch AlphaFold pLDDT data using UniProt ID\n");
+            printf("  -af   \tFetch AlphaFold pLDDT data using UniProt ID\n");
+            printf("  -af_regions\tFetch AlphaFold pLDDT data and slice regions to a file using UniProt ID\n");
             printf("   \t\n");
-            printf("  -slice_domains\tSlice fasta into domains using a CSV-style file (requires slice file name, works with input and all fetches)\n");
+            printf("  -slice_domains <slice_instruction_file>    \tSlice fasta into domains using a CSV-style file (requires slice file name, works with input and all fetches)\n");
             printf("   \t\n");
             printf("  -minmax <codon_usage_file> [window_size]\tCalculate min-max percentage over specified window size (default 18).\n");
+            printf("  -rtt\t Calculate the Random Reverse Translations for the MinMax input sequence (1000 iterations)\n");
             printf("   \t\n");
             printf("   \t\n");
             printf("   \t\n");
             printf("Developed by Juan Mac Donagh at JGU and UNQ\n");
             printf("Contact: macjuan17@gmail.com\n");
             printf("GitHub Repo: https://github.com/Juanmacdonagh17/coconut_repo");
-
+            printf("   \t\n");
             return 0;
 
         } else if (!input_filename) {
@@ -1558,14 +2014,14 @@ int main(int argc, char *argv[]) {
         "    \\____( )___/   ___)\n"
         "         / \\   ___(\n"
         "         (_)___)\n"
-        "         w /|\n"
+        "         w  |\n"
         "         |  |\n"
         "         m  m\n");
         return 1;
     }
 
     // check for output file in both fetch and normal input cases
-    if ((calculate_cu || calculate_rscu || slice_sequence || fetch_sequence || fetch_from_file || fetch_gene || fetch_uniprot) && !output_filename) {
+    if ((calculate_cu || calculate_rscu || slice_sequence || fetch_sequence || fetch_from_file || fetch_gene || fetch_uniprot || calculate_cai) && !output_filename) {
         fprintf(stderr, "Some stuff is missing! Output filename is required for the selected options.\n Try -help to get all the parameters\n");
                 fprintf(stderr, 
         "          ___\n"
@@ -1573,7 +2029,7 @@ int main(int argc, char *argv[]) {
         "    \\____( )___/   ___)\n"
         "         / \\   ___(\n"
         "         (_)___)\n"
-        "         w /|\n"
+        "         w  |\n"
         "         |  |\n"
         "         m  m\n");
          
@@ -1581,8 +2037,13 @@ int main(int argc, char *argv[]) {
     }
 
     // if you run the -af, you need also to run the -uniprot flag
-    if (fetch_alphafold && !fetch_uniprot) {
-        fprintf(stderr, "Error: -af can only be used if -uniprot is also specified.\n");
+    if ((fetch_alphafold && !fetch_uniprot) ||(slice_alphafold && !fetch_uniprot)) {
+        fprintf(stderr, "Error: -af or -af_regions can only be used if -uniprot is also specified.\n");
+        return 1;
+    }
+
+    if (calculate_rtt && !calculate_minmax) {
+        fprintf(stderr, "Error: -rtt  can only be used if -minmax is also used.\n");
         return 1;
     }
 
@@ -1592,8 +2053,8 @@ int main(int argc, char *argv[]) {
         output = fopen(output_filename, "w");
         if (!output) {
             //if (!silent) {
-                fprintf(stderr, "Error opening output file: %s\n", output_filename);
-            //}
+                fprintf(stderr, "Error opening output file: %s\n", output_filename); // there's also an error like this for CAI that is not being shown
+            //}                                                                      // but i left it up in the code
             return 1;
         }
 
@@ -1604,7 +2065,11 @@ int main(int argc, char *argv[]) {
     }
 
     // check that a codon usage file exist and read it
+
     if (calculate_minmax) {
+
+        // be aware that we never trigger the propper calculation of the minmax, as we are not using the calculate_minmax function
+        // here we are just reading the file and LATER we use the function in the in the processSequence part
 
         if (!codon_usage_filename) {
             fprintf(stderr, "Error: Codon usage file must be specified with -minmax flag.\n");
@@ -1674,63 +2139,83 @@ int main(int argc, char *argv[]) {
         }
 
     
-if (fetch_alphafold) {
-    // fetch the af metadata JSON
-    char *metaJson = fetchAlphaFoldMetaJSON(uniprot_id); 
-    char af_csv_name[512]; // 512 chars should be enough? 
+    if (fetch_alphafold) {
+        // fetch the af metadata JSON
+        char *metaJson = fetchAlphaFoldMetaJSON(uniprot_id); 
+        char af_csv_name[512]; // 512 chars should be enough? 
 
-    snprintf(af_csv_name, sizeof(af_csv_name), "%s_pLDDT.csv", uniprot_id);
-    if (!metaJson) {
-        fprintf(stderr, "Could not fetch AlphaFold JSON for UniProt: %s\n", uniprot_id);
-        // handle error
-    } else {
-        // parse out the "pdbUrl" from metaJson
-        char *pdbUrl = parseAlphaFoldPdbUrl(metaJson); 
-        free(metaJson);
-        if (!pdbUrl) {
-            fprintf(stderr, "No pdbUrl in AlphaFold JSON for %s\n", uniprot_id);
+        snprintf(af_csv_name, sizeof(af_csv_name), "%s_pLDDT.csv", uniprot_id);
+        if (!metaJson) {
+            fprintf(stderr, "Could not fetch AlphaFold JSON for UniProt: %s\n", uniprot_id);
             // handle error
         } else {
-            // now fetch the actual PDB file
-            char *pdbData = fetchAlphaFoldPDB(pdbUrl);
-            free(pdbUrl);
-            if (!pdbData) {
-                fprintf(stderr, "Could not fetch PDB data!\n");
+            // parse out the "pdbUrl" from metaJson
+            char *pdbUrl = parseAlphaFoldPdbUrl(metaJson); 
+            free(metaJson);
+            if (!pdbUrl) {
+                fprintf(stderr, "No pdbUrl in AlphaFold JSON for %s\n", uniprot_id);
                 // handle error
             } else {
-                // parse & classify
-                int nRes = 0;
-                CA_Residue *arr = parsePDBforCA(pdbData, &nRes);
-                free(pdbData);
-                if (!arr || nRes == 0) {
-                    fprintf(stderr, "No CA residues parsed!\n");
+                // now fetch the actual PDB file
+                char *pdbData = fetchAlphaFoldPDB(pdbUrl);
+                free(pdbUrl);
+                if (!pdbData) {
+                    fprintf(stderr, "Could not fetch PDB data!\n");
+                    // handle error
                 } else {
-                    analyzeAndWriteFlexibleCSV( // this parameters are set. on a future update, a flag could be added to change them
-                        arr, nRes,
-                        70.0f, // pLDDT cutoff => 70
-                        3,     // minFlexibleRun => 3
-                        1,     // minRigidRun => 1
-                        8.0f,  // contact_dist
-                        af_csv_name // output filename
-  
-                    );
-                    free(arr);
-                    if (!silent) {
-                        fprintf(stdout, "Wrote classification to %s\n", af_csv_name);
+                    // parse & classify
+                    int nRes = 0;
+                    CA_Residue *arr = parsePDBforCA(pdbData, &nRes);
+                    free(pdbData);
+                    if (!arr || nRes == 0) {
+                        fprintf(stderr, "No CA residues parsed!\n");
+                    } else {
+                        analyzeAndWriteFlexibleCSV( // this parameters are set. on a future update, a flag could be added to change them
+                            arr, nRes,
+                            70.0f, // pLDDT cutoff => 70
+                            3,     // minFlexibleRun => 3
+                            1,     // minRigidRun => 1
+                            8.0f,  // contact_dist
+                            af_csv_name // output filename
+
+
+                        );
+                        if (slice_alphafold) {
+                            
+                            char af_regions_csv_name[512]; 
+                            snprintf(af_regions_csv_name, sizeof(af_regions_csv_name), "%s_regions_pLDDT.csv", uniprot_id);
+                            
+                            if (!silent) {
+                                fprintf(stdout, "Wrote regions to %s\n", af_regions_csv_name);
+                            }
+                            
+                            writeRegionSlices(arr, nRes, ensgID, af_regions_csv_name);
+
+                            slice_sequence = true;
+                            slice_filename = af_regions_csv_name;
+                        }
+
+                        free(arr);
+                        if (!silent) {
+                            fprintf(stdout, "Wrote classification to %s\n", af_csv_name);
+                            }
                         }
                     }
                 }
             }
         }
-    }
 
 
-    fetch_sequence = true;
-    //fetch_multi    = true; // skip this, as if you want 1 uniprot you don't want multiple versions of the transcript
-    protein_id     = ensgID; // ensgID, but actually it's the enstID :P
+        fetch_sequence = true;
+        //fetch_multi    = true; // skip this, as if you want 1 uniprot you don't want multiple versions of the transcript
+        protein_id     = ensgID; // ensgID, but actually it's the enstID :P
 
+        // if (slice_alphafold) {
+        //     slice_sequence = true;
+        //     slice_filename = af_regions_csv_name;
+        // }
 
-    }
+        }
 
     if (fetch_sequence) { 
 
@@ -1767,7 +2252,8 @@ if (fetch_alphafold) {
 
                     processSequence(currentSequence.sequence, currentSequence.id, output, calculate_cu, calculate_rscu,
                                     calculate_minmax, window_size, output_filename, minmax_output_filename, 
-                                    silent, slice_sequence, slice_filename);
+                                    silent, slice_sequence, slice_filename, calculate_cai, cai_output_filename,cai_reference_filename, global_cai_table, n_cai_table,
+                                    calculate_rtt);
                     initializeCodonCounts(&currentSequence);
                 }
 
@@ -1795,7 +2281,8 @@ if (fetch_alphafold) {
 
             processSequence(currentSequence.sequence, currentSequence.id, output, calculate_cu, calculate_rscu, 
                             calculate_minmax, window_size, output_filename, minmax_output_filename, 
-                            silent, slice_sequence, slice_filename);
+                            silent, slice_sequence, slice_filename, calculate_cai,cai_output_filename,cai_reference_filename, global_cai_table, n_cai_table,
+                            calculate_rtt);
         }
         
         free(sequence_data);
@@ -1834,7 +2321,8 @@ if (fetch_alphafold) {
             // process the fetched sequence
             processSequence(sequence_data, enst_id, output, calculate_cu, calculate_rscu, 
                             calculate_minmax, window_size, output_filename, minmax_output_filename,
-                            silent, slice_sequence, slice_filename);
+                            silent, slice_sequence, slice_filename, calculate_cai,cai_output_filename, cai_reference_filename,global_cai_table, n_cai_table,
+                            calculate_rtt);
 
             free(sequence_data);
         }
@@ -1866,7 +2354,8 @@ if (fetch_alphafold) {
                     // process the previous sequence
                     processSequence(currentSequence.sequence, currentSequence.id, output, calculate_cu, calculate_rscu, 
                                     calculate_minmax, window_size, minmax_output_filename,output_filename, 
-                                    silent, slice_sequence, slice_filename);
+                                    silent, slice_sequence, slice_filename, calculate_cai,cai_output_filename, cai_reference_filename,global_cai_table, n_cai_table,
+                                    calculate_rtt);
                 }
                 // start a new sequence
                 strncpy(currentSequence.id, line + 1, sizeof(currentSequence.id) - 1);
@@ -1886,7 +2375,8 @@ if (fetch_alphafold) {
         if (active) {
             processSequence(currentSequence.sequence, currentSequence.id, output, calculate_cu, calculate_rscu, 
                             calculate_minmax, window_size, output_filename, minmax_output_filename, 
-                            silent, slice_sequence, slice_filename);
+                            silent, slice_sequence, slice_filename, calculate_cai,cai_output_filename,cai_reference_filename, global_cai_table, n_cai_table,
+                            calculate_rtt);
         }
 
         fclose(input);
