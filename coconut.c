@@ -1316,6 +1316,9 @@ int loadCAIReference(const char *filename, Codon_Ref_CAI *table, int max_entries
     char codon[4];
     char freqToken[32];
     while (fscanf(fp, "%3s %31s", codon, freqToken) == 2 && count < max_entries) {
+        for (int k = 0; codon[k] != '\0'; k++) {
+            if (codon[k] == 'U') codon[k] = 'T';
+        }
         strcpy(table[count].codon, codon);
         float freq;
         /* Parse the frequency up to the parenthesis.
@@ -1334,10 +1337,13 @@ int loadCAIReference(const char *filename, Codon_Ref_CAI *table, int max_entries
 
 void computeRelativeAdaptiveness(Codon_Ref_CAI *table, int n) {
     for (int i = 0; i < n; i++) {
+        
         char aa = getAminoAcidIndex(table[i].codon);
+        
         float maxFreq = 0;
         for (int j = 0; j < n; j++) {
             if (getAminoAcidIndex(table[j].codon) == aa) {
+                //fprintf(stdout, "Codon: %s, Amino Acid: %c\n", table[j].codon, aa);
                 if (table[j].frequency > maxFreq)
                     maxFreq = table[j].frequency;
             }
@@ -1346,32 +1352,51 @@ void computeRelativeAdaptiveness(Codon_Ref_CAI *table, int n) {
     }
 }
 
-/* given a transcript sequence (DNA), compute its CAI.
-   (T's will be converted to U's).
-   it is read in triplets (codons). for each codon, lookup the weight from the table.
-   CAI = exp((1/L) * sum(log(w_i))) for all codons i in the gene.
-*/
+/* given a transcript sequence, to compute its CAI:
+   (convert T to U.
+   read the triplets and lookup the weight from the table (used as an input)
+   then calculate the CAI = exp((1/L) * sum(log(w_i))) for all codons i in the gene
+   this is addapted from " The codon adaptation index - a measure of directional synonymous codon usage bias, and its potential applications, Paul M.Sharpl and Wen-Hsiung Li"
+
+    They don't count ATG and TGG (single codon Aa) for the count that goes to L! important!!! 
+   */
 float computeCAI(const char *sequence, Codon_Ref_CAI *table, int nTable) {
-    int len = strlen(sequence);
-    int L = len / 3;
-    if (L == 0) return 0;
-    double sumLog = 0.0;
-    int count = 0;
+    int len = strlen(sequence); // get the full length of the codon sequence
+    //fprintf(stdout, "Sequence length: %d\n", len);
+    if (strlen(sequence) % 3 != 0) {
+        fprintf(stderr, "Sequence length is not a multiple of 3\n");
+        return 0;
+    }
+
+    int L = len / 3; // div by 3 to get the # of codons or Aa
+    if (L == 0) return 0; // if it's empty return 0
+    
+
+    double sumLog = 0.0; 
+    int count = 0; 
     for (int i = 0; i < len - 2; i += 3) {
         char codon[4];
         codon[0] = toupper(sequence[i]);
         codon[1] = toupper(sequence[i+1]);
         codon[2] = toupper(sequence[i+2]);
         codon[3] = '\0';
-        /* Convert T to U */
-        for (int k = 0; k < 3; k++) {
-            if (codon[k] == 'T') codon[k] = 'U';
+        // Convert T to U
+        // for (int k = 0; k < 3; k++) {
+        //     if (codon[k] == 'T') codon[k] = 'U';
+        // }
+        // Skip AUG and UGG, since their RSCU is fixed at 1.0 (they do not contribute)
+        if (strcmp(codon, "ATG") == 0 || strcmp(codon, "TGG") == 0){ //||
+           // strcmp(codon, "TAA") == 0 || strcmp(codon, "TAG") == 0 || strcmp(codon, "TGA") == 0) {
+            continue;
         }
+        
         float w = 0.0;
         for (int j = 0; j < nTable; j++) {
             if (strcmp(codon, table[j].codon) == 0) {
                 w = table[j].weight;
+                //fprintf(stdout, "Codon: %s, Weight: %f\n", codon, w);
                 break;
+
             }
         }
         if (w <= 0) continue;
@@ -1383,12 +1408,15 @@ float computeCAI(const char *sequence, Codon_Ref_CAI *table, int nTable) {
     return exp(avgLog);
 }
 
-void writeCaiCSV(const char *cai_output_filename, const char *sequence_id, const char *sequence,
+void writeCaiCSV(const char *output_filename, const char *sequence_id, const char *sequence,
                  Codon_Ref_CAI *table, int nTable) {
     float cai = computeCAI(sequence, table, nTable);
-    FILE *fp = fopen(cai_output_filename, "a");
+    FILE *fp = fopen(output_filename, "a");
+        // for now this is here but eventually it needs to go down, so i can use the -silent flag             
+        fprintf(stdout,"CAI calculated for %s, value: %lf\n", sequence_id, cai);
+
     if (!fp) {
-        fprintf(stderr, "Error opening CAI output file: %s\n", cai_output_filename);
+        fprintf(stderr, "Error opening CAI output file: %s\n", output_filename);
         return;
     }
     fprintf(fp, "%s,%.4f\n", sequence_id, cai);
@@ -1636,7 +1664,7 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
                      bool calculate_cu, bool calculate_rscu, bool calculate_minmax, 
                      int window_size, const char *output_filename, const char *minmax_output_filename,
                      bool silent, bool slice_sequence, const char *slice_filename, 
-                     bool calculate_cai, const char *cai_output_filename, const char *cai_reference_filename, Codon_Ref_CAI *cai_table, int n_cai_table,
+                     bool calculate_cai,  const char *cai_reference_filename, Codon_Ref_CAI *cai_table, int n_cai_table,
                      bool calculate_rtt) {
 
     // initialize sequence structure
@@ -1683,7 +1711,7 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
             // because this is here, I can't really use the silent flag to skip the output text 
             fprintf(stdout, "Calculating RRT minmax profile for %s\n", minmax_output_filename);
             // Specify how many iterations you want (e.g., 200)
-            int iterations = 1000;
+            int iterations = 200;
             int rrtProfileLength = 0;
             char *rrt_output_filename = malloc(strlen(minmax_output_filename) + 5);
             float *rrtProfile = computeRRTMinMaxProfile(currentSequence.sequence, global_cai_table, n_cai_table, window_size, iterations, &rrtProfileLength);
@@ -1722,9 +1750,9 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
         computeRelativeAdaptiveness(global_cai_table, n_cai_table);
        
         static bool cai_header_written = false;
-        FILE *fp = fopen(cai_output_filename, cai_header_written ? "a" : "w"); // open in append mode if header has been written
+        FILE *fp = fopen(output_filename, cai_header_written ? "a" : "w"); // open in append mode if header has been written
         if (!fp) {
-            fprintf(stderr, "Error opening CAI output file: %s\n", cai_output_filename);
+            fprintf(stderr, "Error opening CAI output file: %s\n", output_filename);
         } else {
             if (!cai_header_written) {
                 fprintf(fp, "id,CAI\n");
@@ -1732,7 +1760,7 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
             }
             fclose(fp);
         }
-        writeCaiCSV(cai_output_filename, currentSequence.id, currentSequence.sequence, global_cai_table, n_cai_table);
+        writeCaiCSV(output_filename, currentSequence.id, currentSequence.sequence, global_cai_table, n_cai_table);
     }
 
     // slicing functionality
@@ -1821,9 +1849,7 @@ int main(int argc, char *argv[]) {
     char *gene_species = NULL;
     char *gene_name = NULL;
     char *uniprot_id = NULL;
-
     char *cai_reference_filename = NULL; // CAI reference table
-    char *cai_output_filename = NULL; // CAI output filename
 
     // variable declarations for slicing
     SliceInstruction *instructions = NULL;
@@ -1834,7 +1860,7 @@ int main(int argc, char *argv[]) {
        it should be exremly clear on the help file  */
 
     for (int i = 1; i < argc; i++) {
-
+        
         if (strcmp(argv[i], "-cu") == 0) {
             calculate_cu = true;
 
@@ -1846,27 +1872,30 @@ int main(int argc, char *argv[]) {
             calculate_rscu = true;
 
 
-        // } else if (strcmp(argv[i], "-cai") == 0) {
-        //     calculate_cai = true;
-        //     // output file for CAI
-        //     if (i + 2 < argc) {
-        //         cai_reference_filename = argv[i + 1]; // CAI reference table
-        //         cai_output_filename = argv[i + 2];
-        //         i += 2;
-        //     } else {
-        //         fprintf(stderr, "Error: -cai requires a reference table file\n");
-        //         return 1;
-        //     }  
-
         } else if (strcmp(argv[i], "-cai") == 0) {
             calculate_cai = true;
-            cai_output_filename = argv[++i]; // output file for CAI
-            if (i + 1 < argc) {
-                cai_reference_filename = argv[++i]; // CAI reference table
+    
+            // output file for CAI
+            if (i + 2  < argc) {
+                cai_reference_filename = argv[i + 1]; // CAI reference table
+                //fprintf(stdout,"%s",cai_reference_filename);
+                output_filename = argv[i + 2];
+                //fprintf(stdout,"%s",cai_output_filename);
+                i += 2;
             } else {
                 fprintf(stderr, "Error: -cai requires a reference table file\n");
                 return 1;
-            }
+            }  
+
+        // } else if (strcmp(argv[i], "-cai") == 0) {
+        //     calculate_cai = true;
+        //     cai_output_filename = argv[++i]; // output file for CAI
+        //     if (i + 1 < argc) {
+        //         cai_reference_filename = argv[++i]; // CAI reference table
+        //     } else {
+        //         fprintf(stderr, "Error: -cai requires a reference table file\n");
+        //         return 1;
+        //     }
             
         } else if (strcmp(argv[i], "-silent") == 0) {
             silent = true;  // silent mode
@@ -2020,7 +2049,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // check for output file in both fetch and normal input cases
+    // check for output file in both fetch and normal input cases, cai gets a different || because i named the output differntly 
     if ((calculate_cu || calculate_rscu || slice_sequence || fetch_sequence || fetch_from_file || fetch_gene || fetch_uniprot || calculate_cai) && !output_filename) {
         fprintf(stderr, "Some stuff is missing! Output filename is required for the selected options.\n Try -help to get all the parameters\n");
                 fprintf(stderr, 
@@ -2252,7 +2281,7 @@ int main(int argc, char *argv[]) {
 
                     processSequence(currentSequence.sequence, currentSequence.id, output, calculate_cu, calculate_rscu,
                                     calculate_minmax, window_size, output_filename, minmax_output_filename, 
-                                    silent, slice_sequence, slice_filename, calculate_cai, cai_output_filename,cai_reference_filename, global_cai_table, n_cai_table,
+                                    silent, slice_sequence, slice_filename, calculate_cai,cai_reference_filename, global_cai_table, n_cai_table,
                                     calculate_rtt);
                     initializeCodonCounts(&currentSequence);
                 }
@@ -2281,7 +2310,7 @@ int main(int argc, char *argv[]) {
 
             processSequence(currentSequence.sequence, currentSequence.id, output, calculate_cu, calculate_rscu, 
                             calculate_minmax, window_size, output_filename, minmax_output_filename, 
-                            silent, slice_sequence, slice_filename, calculate_cai,cai_output_filename,cai_reference_filename, global_cai_table, n_cai_table,
+                            silent, slice_sequence, slice_filename, calculate_cai,cai_reference_filename, global_cai_table, n_cai_table,
                             calculate_rtt);
         }
         
@@ -2321,7 +2350,7 @@ int main(int argc, char *argv[]) {
             // process the fetched sequence
             processSequence(sequence_data, enst_id, output, calculate_cu, calculate_rscu, 
                             calculate_minmax, window_size, output_filename, minmax_output_filename,
-                            silent, slice_sequence, slice_filename, calculate_cai,cai_output_filename, cai_reference_filename,global_cai_table, n_cai_table,
+                            silent, slice_sequence, slice_filename, calculate_cai, cai_reference_filename,global_cai_table, n_cai_table,
                             calculate_rtt);
 
             free(sequence_data);
@@ -2354,7 +2383,7 @@ int main(int argc, char *argv[]) {
                     // process the previous sequence
                     processSequence(currentSequence.sequence, currentSequence.id, output, calculate_cu, calculate_rscu, 
                                     calculate_minmax, window_size, minmax_output_filename,output_filename, 
-                                    silent, slice_sequence, slice_filename, calculate_cai,cai_output_filename, cai_reference_filename,global_cai_table, n_cai_table,
+                                    silent, slice_sequence, slice_filename, calculate_cai, cai_reference_filename,global_cai_table, n_cai_table,
                                     calculate_rtt);
                 }
                 // start a new sequence
@@ -2375,7 +2404,7 @@ int main(int argc, char *argv[]) {
         if (active) {
             processSequence(currentSequence.sequence, currentSequence.id, output, calculate_cu, calculate_rscu, 
                             calculate_minmax, window_size, output_filename, minmax_output_filename, 
-                            silent, slice_sequence, slice_filename, calculate_cai,cai_output_filename,cai_reference_filename, global_cai_table, n_cai_table,
+                            silent, slice_sequence, slice_filename, calculate_cai,cai_reference_filename, global_cai_table, n_cai_table,
                             calculate_rtt);
         }
 
