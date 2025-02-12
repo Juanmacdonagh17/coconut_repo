@@ -12,6 +12,10 @@
 #include <ctype.h> 
 #include <curl/curl.h>
 #include <math.h>
+#include <time.h>
+
+
+// srand((unsigned)time(NULL));
 
 /////////////////////////
 //  structures         //
@@ -1160,21 +1164,16 @@ void calculateMinMax(SequenceCodonCounts *seq, int window_size, const char *minm
 }
 
 // RTT functions 
-
-char *generateRRTSequence(const char *sequence, Codon_Ref_CAI *table, int nTable) { // be aware that this is using the CAI table, not the table from the minmax
+char *generateRRTSequence(const char *sequence){ //Codon_Ref_CAI *table, int nTable) {
     int len = strlen(sequence);
     int numCodons = len / 3;
-    char *rrt = malloc(len + 1); // just alocate the same length as the input sequence for memory
+    char *rrt = malloc(len + 1); // allocate same length as input
     if (!rrt) return NULL;
     for (int i = 0; i < numCodons; i++) {
         char originalCodon[4];
         strncpy(originalCodon, sequence + i * 3, 3);
         originalCodon[3] = '\0';
-        //  'T' to 'U' if needed, but all sequences should have T's from the get go
-        for (int k = 0; k < 3; k++) {
-            if (originalCodon[k] == 'T') originalCodon[k] = 'U';
-        }
-        // determine the aa for the codon using the same old method as before
+        // find the amino acid for the original codon
         char aa = '?';
         for (int j = 0; j < MAX_CODONS; j++) {
             if (strcmp(codons[j], originalCodon) == 0) {
@@ -1182,49 +1181,126 @@ char *generateRRTSequence(const char *sequence, Codon_Ref_CAI *table, int nTable
                 break;
             }
         }
-        // accumulate the total weight for all codons in the table that encode aa.
+
+        
+        // accumulate total weight for all codons (from our standard 64) that encode the same aa.
         float totalWeight = 0.0f;
-        for (int j = 0; j < nTable; j++) {
-            //  getAminoAcid to determine the amino acid encoded by table[j].codon.
-            char tableAA = '?';
-            for (int k = 0; k < MAX_CODONS; k++) {
-                if (strcmp(codons[k], table[j].codon) == 0) {
-                    tableAA = amino_acids[k];
-                    break;
-                }
-            }
-            if (tableAA == aa) {
-                totalWeight += table[j].weight;
+        for (int j = 0; j < MAX_CODONS; j++) {
+            if (amino_acids[j] == aa) {
+                int idx_i, idx_j, idx_k;
+                getCodonIndices(codons[j], &idx_i, &idx_j, &idx_k);
+                CodonUsageStats stats = codon_usage_stats[idx_i][idx_j][idx_k];
+                totalWeight += stats.usage; // this is the col for the freq (first one)
             }
         }
-        // choose a random number between 0 and totalWeight, this part is f u n k y 
+        
+        // choose a random number between 0 and totalWeight.
         float r = ((float)rand() / (float)RAND_MAX) * totalWeight;
+       // fprintf(stderr, "w: %.2f",r);
         float cumulative = 0.0f;
         char selectedCodon[4] = "";
-        for (int j = 0; j < nTable; j++) {
-            char tableAA = '?';
-            for (int k = 0; k < MAX_CODONS; k++) {
-                if (strcmp(codons[k], table[j].codon) == 0) {
-                    tableAA = amino_acids[k];
-                    break;
-                }
-            }
-            if (tableAA == aa) {
-                cumulative += table[j].weight;
+        for (int j = 0; j < MAX_CODONS; j++) {
+            if (amino_acids[j] == aa) {
+                int idx_i, idx_j, idx_k;
+                getCodonIndices(codons[j], &idx_i, &idx_j, &idx_k);
+                CodonUsageStats stats = codon_usage_stats[idx_i][idx_j][idx_k];
+                cumulative += stats.usage;
                 if (r <= cumulative) {
-                    strcpy(selectedCodon, table[j].codon);
+                    strcpy(selectedCodon, codons[j]);
                     break;
                 }
             }
         }
-        // if nothing was selected, use the original codon
-        if (selectedCodon[0] == '\0')
+        // if nothing was selected, fallback to the original codon.
+        if (selectedCodon[0] == '\0') {
             strcpy(selectedCodon, originalCodon);
+        }
         strncpy(rrt + i * 3, selectedCodon, 3);
     }
     rrt[len] = '\0';
     return rrt;
 }
+
+
+// char *generateRRTSequence(const char *sequence, Codon_Ref_CAI *table, int nTable) { // be aware that this is using the CAI table, not the table from the minmax
+//     int len = strlen(sequence);
+//     int numCodons = len / 3;
+//     char *rrt = malloc(len + 1); // just alocate the same length as the input sequence for memory
+//     if (!rrt) return NULL;
+//     for (int i = 0; i < numCodons; i++) {
+//         char originalCodon[4];
+//         strncpy(originalCodon, sequence + i * 3, 3);
+//         originalCodon[3] = '\0';
+//         //  'T' to 'U' if needed, but all sequences should have T's from the get go
+//         // for (int k = 0; k < 3; k++) {
+//         //     if (originalCodon[k] == 'T') originalCodon[k] = 'U';
+//         // }
+//         // determine the aa for the codon using the same old method as before
+//         char aa = '?';
+//         for (int j = 0; j < MAX_CODONS; j++) {
+//             //fprintf(stderr, "OriginalCodon: %s\n", originalCodon);
+//             if (strcmp(codons[j], originalCodon) == 0) {
+//                 //fprintf(stderr, "Other codon: %s\n", codons[j]);
+//                 aa = amino_acids[j];
+//                 // fprintf(stderr, "AA: %c\n", aa);
+//                 break;
+//             }
+//         }
+//         fprintf(stderr, "ntable %d\n", nTable);
+//         // accumulate the total weight for all codons in the table that encode aa.
+//         float totalWeight = 0.0f;
+//         for (int j = 0; j < nTable; j++) {
+//             fprintf(stderr, "Table values: %s\n", table[j].codon);
+//             // fprintf(stderr, "Codon: %s\n", table[j].codon); 
+//                 // for (int k = 0; k < 3; k++) {
+//                 //     if (originalCodon[k] == 'T') originalCodon[k] = 'U';
+//                 // }
+//             //  getAminoAcid to determine the amino acid encoded by table[j].codon.
+
+//             char tableAA = '?';
+//             for (int k = 0; k < MAX_CODONS; k++) {
+//                 // fprintf(stderr, "Codon: %s\n", table[j].codon); 
+//                 if (strcmp(codons[k], table[j].codon) == 0) {
+//                     tableAA = amino_acids[k];
+//                 //    fprintf(stderr, "TableAA: %c\n", tableAA);
+//                     break;
+//                 } 
+//             if (tableAA == aa) {
+//                 totalWeight += table[j].weight;
+//             }
+//         }
+//     }
+//         // fprintf(stderr, "Weight: %.2f\n", totalWeight);
+
+//         // choose a random number between 0 and totalWeight, this part is f u n k y 
+//         float r = ((float)rand() / (float)RAND_MAX) * totalWeight;
+//         // fprintf(stderr, "Random number: %.2f\n", r);
+//         float cumulative = 0.0f;
+//         char selectedCodon[4] = "";
+//         for (int j = 0; j < nTable; j++) {
+//             char tableAA = '?';
+//             for (int k = 0; k < MAX_CODONS; k++) {
+//                 if (strcmp(codons[k], table[j].codon) == 0) {
+//                     tableAA = amino_acids[k];
+//                     break;
+//                 }
+//             }
+//             if (tableAA == aa) {
+//                 cumulative += table[j].weight;
+//                 if (r <= cumulative) {
+//                     strcpy(selectedCodon, table[j].codon);
+//                     break;
+//                 }
+//             }
+//         }
+//         // if nothing was selected, use the original codon
+//         if (selectedCodon[0] == '\0')
+//             strcpy(selectedCodon, originalCodon);
+//         strncpy(rrt + i * 3, selectedCodon, 3);
+//     }
+//     rrt[len] = '\0';
+//     return rrt;
+// }
 // this is the same (or should be) as the minmax function, but with the RRT sequence
 
 float* computeMinMaxProfile(const char *sequence, int window_size, int *profileLength) { 
@@ -1284,7 +1360,7 @@ float* computeRRTMinMaxProfile(const char *sequence, Codon_Ref_CAI *table, int n
     float *accumulatedProfile = calloc(nWindows, sizeof(float));
     if (!accumulatedProfile) return NULL;
     for (int iter = 0; iter < iterations; iter++) {
-        char *rrtSeq = generateRRTSequence(sequence, table, nTable);
+        char *rrtSeq = generateRRTSequence(sequence);//, table, nTable);
         if (!rrtSeq) continue;
         int profLen = 0;
         float *profile = computeMinMaxProfile(rrtSeq, window_size, &profLen);
@@ -1708,10 +1784,11 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
 
         if (calculate_rtt) {
             
+            srand((unsigned)time(NULL));
             // because this is here, I can't really use the silent flag to skip the output text 
             fprintf(stdout, "Calculating RRT minmax profile for %s\n", minmax_output_filename);
             // Specify how many iterations you want (e.g., 200)
-            int iterations = 200;
+            int iterations = 1000;
             int rrtProfileLength = 0;
             char *rrt_output_filename = malloc(strlen(minmax_output_filename) + 5);
             float *rrtProfile = computeRRTMinMaxProfile(currentSequence.sequence, global_cai_table, n_cai_table, window_size, iterations, &rrtProfileLength);
@@ -1974,8 +2051,8 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
 
-        } else if (strcmp(argv[i], "-rtt") == 0) {
-            calculate_rtt = true;
+        } else if (strcmp(argv[i], "-rrt") == 0) {
+            calculate_rtt = true; // change this to rRt, not rTt :p
 
 
         } else if (strcmp(argv[i], "-help") == 0) {
