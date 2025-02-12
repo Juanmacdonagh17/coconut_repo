@@ -94,7 +94,7 @@ Using the -help flag will provide a list of all available commands, but here is 
   
 
 + -minmax: calculates the %MinMax for an input fasta or multifasta. If not indicated otherwise, the window of comparison is 18 codons, but this can be changed. For this, a table of optimal use codons is needed. The table for _Homo Sapiens_ is provided. (For more context on how the %MinMax is calculated, check references (4).
-+ - rrt: calculate the Random Reverse Translations for the %MinMax input sequence (1000 iterations). (For more context on how the %MinMax is calculated, check references (4).
++ -rrt: calculate the Random Reverse Translations for the %MinMax input sequence (1000 iterations). (For more context on how the %MinMax is calculated, check references (4).
 
 
 Aditional codon usage tables can be found online, for example: https://www.kazusa.or.jp/codon/ 
