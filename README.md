@@ -1,5 +1,5 @@
 ***Coconut is currently being developed.
-Be aware of bugs, especially tyranids.***
+Be aware of bugs***
 
 ---
 
@@ -11,7 +11,17 @@ Be aware of bugs, especially tyranids.***
 
 ### Introduction 
 
-Coconut is an easy-to-run codon analysis suite. It's fully coded on C, providing functions for analyzing FASTA or multi FASTA files or fetching transcript sequences from Ensemlb, and calculating parametires like Codon Usage, Relative Synonimus Codon Usage and %MinMax.  
+Coconut is an easy-to-run codon bias and protein structure analysis suite. It's fully coded on C, providing functions for analyzing FASTA or multi FASTA files or fetching transcript sequences from Ensemlb or UniProt, and calculating parameters like Codon Usage, Relative Synonymous Codon Usage, %MinMax and simple protein structure analysis.  
+
+---
+### Biological context
+
+According to the central dogma of molecular biology, every protein comes from an RNA sequence, that, in turn, comes from a DNA sequence. 
+
+It is already established that the function of proteins is strictly correlated with the - or lack of - structure and that protein structure can be determined by the contact of the atoms that form the aminoacidic chain. 
+Recently, it has been proven that not only the aminoacidic determines the structure - or ensemble of structures - but that the use of codons at the messenger RNA level can also affect this, as they regulate the speed  of translation within the ribosome, and can give the protein enough time to fold into separate domains (for more context, see references (1, 2)).
+
+Even though many online tools and packages for different programming languages can calculate different parameters to study these correlations, there's still one single suite of tools that can perform this different analysis in a fast and easy to run way. With this C pipeline, we intend to provide the bioinformatics and molecular biology community with a single tool that can perform reliable analysis for these cases.
 
 ---
 ### Installation 
@@ -65,19 +75,29 @@ Using the -help flag will provide a list of all available commands, but here is 
 + -help: shows all the arguments and options available.
 + -slinet: optional flag, used for not showing the outputs while running Coconut.
 + -cu: calculates Codon Usage for an input fasta or multifasta or a fetched ENST.
-+ -rscu: calculates Relative Synonimus Codon Usage for an input fasta or multifasta or a fetched ENST.
++ -rscu: calculates Relative Synonimus Codon Usage for an input fasta or multifasta or a fetched ENST. (For more context on RSCU and CAI, check references (3).
 + -all: calculates both CU and RSCU for an input fasta or multifasta or a fetched ENST.
+
++-cai: calculates the Codon Adaptation Index, using a codon reference table with frequencies. (For more context on RSCU and CAI, check references (3).
 
 + -fetch: fetches a transcript (specifically the main CDS) from Ensembl, using the transcript identifier.
 + -fetchfile: same as fetch, but using a list of identifiers from a file, one per line.
+  
 + -multi: fetches all versions of a transcript, using ENSG instead of ENST.
-+ -gene: fetches all versions of a transcript using a species and gene symbol as inputs. 
++ -gene: fetches all versions of a transcript using a species and gene symbol as inputs.
+  
 + -uniprot: fetches the main version of a transcript using the UniProt ID as an entry point.
-+ -af: fetches the pLDDT from the AF model, and it creates a naive structural assignation based on pLDDT and contacts from the PDB AF file.
++ -af: fetches the pLDDT from the AF model, and it creates a naive structural assignation based on pLDDT and contacts from the PDB AF file. (For more context on how the regions are assigned, check references (5, 6).
++ af_regions: fetches AlphaFold pLDDT data and slice regions to a file using UniProt ID
+
 + -slice_domains: used to easily compare CU and RSCU between domains. It uses a file with "slice instructions" (find examples below, works with local files and with fetch).
+  
 
-+ -minmax: calculates the %MinMax for an input fasta or multifasta. If not indicated otherwise, the window of comparison is 18 codons, but this can be changed. For this, a table of optimal use codons is needed. The table for _Homo Sapiens_ is provided.
++ -minmax: calculates the %MinMax for an input fasta or multifasta. If not indicated otherwise, the window of comparison is 18 codons, but this can be changed. For this, a table of optimal use codons is needed. The table for _Homo Sapiens_ is provided. (For more context on how the %MinMax is calculated, check references (4).
++ +- rrt: calculate the Random Reverse Translations for the %MinMax input sequence (1000 iterations). (For more context on how the %MinMax is calculated, check references (4).
 
+
+Aditional codon usage tables can be found online, for example: https://www.kazusa.or.jp/codon/ 
 ---
 ### Examples
 
@@ -161,13 +181,25 @@ If you want to perform the RRT over the sequence:
 | Calculate Codon Adaptation Index            | ✅        |
 | Perform RRT over the %MinMax                | ✅        |
 | Perform CU/RSCU over AF domain classifiation| ✅        |
+| Calculate CAI                               | ✅        |
 | Fetch domains from InterPro or CATH         | ❔        |
-| ~~NW alignment method~~                     | ❌        |
-| ~~MobiDB integration for disorder regions~~ | ❌        |
-| ~~Incorrect length error~~                  | ❌        |
-| ~~Optional flags (no ATG, no STOP, etc)~~   | ❌        |
                                                       
 ---
+### References: 
 
+1. The Effects of Codon Usage on Protein Structure and Folding
+McKenze J. Moss, Laura M. Chamness, and Patricia L. Clark
+2. Synonymous but Not Silent: The Codon Usage Code for Gene Expression and Protein Folding
+Yi Liu, Qian Yang, and Fangzhou Zhao
+3. The codon adaptation index-a measure of directional synonymous codon usage bias, and its potential applications
+Paul M. Sharp, Wen-Hsiung Li
+4. %MinMax: A versatile tool for calculating and comparing synonymous codon usage and its impact on protein folding
+Anabel Rodriguez, Gabriel Wright, Scott Emrich, Patricia L. Clark
+5. Accurate structure prediction of biomolecular interactions with AlphaFold 3
+Josh Abramson et. al.
+6. Afflecto: A Web Server to Generate Conformational Ensembles of Flexible Proteins from Alphafold Models
+Matyas Pajkos, Ilinka Clerc, Christophe Zanon, Pau Bernado, Juan Cortes
+
+---
 
 
