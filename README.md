@@ -78,7 +78,7 @@ Using the -help flag will provide a list of all available commands, but here is 
 + -rscu: calculates Relative Synonimus Codon Usage for an input fasta or multifasta or a fetched ENST. (For more context on RSCU and CAI, check references (3).
 + -all: calculates both CU and RSCU for an input fasta or multifasta or a fetched ENST.
 
-+-cai: calculates the Codon Adaptation Index, using a codon reference table with frequencies. (For more context on RSCU and CAI, check references (3).
++ -cai: calculates the Codon Adaptation Index, using a codon reference table with frequencies. (For more context on RSCU and CAI, check references (3).
 
 + -fetch: fetches a transcript (specifically the main CDS) from Ensembl, using the transcript identifier.
 + -fetchfile: same as fetch, but using a list of identifiers from a file, one per line.
@@ -94,10 +94,11 @@ Using the -help flag will provide a list of all available commands, but here is 
   
 
 + -minmax: calculates the %MinMax for an input fasta or multifasta. If not indicated otherwise, the window of comparison is 18 codons, but this can be changed. For this, a table of optimal use codons is needed. The table for _Homo Sapiens_ is provided. (For more context on how the %MinMax is calculated, check references (4).
-+ +- rrt: calculate the Random Reverse Translations for the %MinMax input sequence (1000 iterations). (For more context on how the %MinMax is calculated, check references (4).
++ - rrt: calculate the Random Reverse Translations for the %MinMax input sequence (1000 iterations). (For more context on how the %MinMax is calculated, check references (4).
 
 
 Aditional codon usage tables can be found online, for example: https://www.kazusa.or.jp/codon/ 
+
 ---
 ### Examples
 
@@ -187,17 +188,17 @@ If you want to perform the RRT over the sequence:
 ---
 ### References: 
 
-1. The Effects of Codon Usage on Protein Structure and Folding
+1. The Effects of Codon Usage on Protein Structure and Folding /
 McKenze J. Moss, Laura M. Chamness, and Patricia L. Clark
-2. Synonymous but Not Silent: The Codon Usage Code for Gene Expression and Protein Folding
+2. Synonymous but Not Silent: The Codon Usage Code for Gene Expression and Protein Folding /
 Yi Liu, Qian Yang, and Fangzhou Zhao
-3. The codon adaptation index-a measure of directional synonymous codon usage bias, and its potential applications
+3. The codon adaptation index-a measure of directional synonymous codon usage bias, and its potential applications /
 Paul M. Sharp, Wen-Hsiung Li
-4. %MinMax: A versatile tool for calculating and comparing synonymous codon usage and its impact on protein folding
+4. %MinMax: A versatile tool for calculating and comparing synonymous codon usage and its impact on protein folding /
 Anabel Rodriguez, Gabriel Wright, Scott Emrich, Patricia L. Clark
-5. Accurate structure prediction of biomolecular interactions with AlphaFold 3
+5. Accurate structure prediction of biomolecular interactions with AlphaFold 3 /
 Josh Abramson et. al.
-6. Afflecto: A Web Server to Generate Conformational Ensembles of Flexible Proteins from Alphafold Models
+6. Afflecto: A Web Server to Generate Conformational Ensembles of Flexible Proteins from Alphafold Models /
 Matyas Pajkos, Ilinka Clerc, Christophe Zanon, Pau Bernado, Juan Cortes
 
 ---
