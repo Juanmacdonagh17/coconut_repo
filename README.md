@@ -157,6 +157,14 @@ If you want to perform the RRT over the sequence:
 ```bash
 ./coconut -rtt -minmax Usage-num3.man ENST00000372979
 ```
+
+
+To perform a minmax calculation with a fetch: both "a" and "*.fasta" work as placeholders for parsing the arguments, this will be fixed soon:
+
+```bash
+./coconut  -uniprot Q4KMZ1 a -af -rrt -minmax codon_table_minmax_hsapiens Q4KMZ1.fasta
+```
+
 ---
 
 ### Progress: 
