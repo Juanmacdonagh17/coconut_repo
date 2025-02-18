@@ -301,7 +301,8 @@ char* fetchEnsemblGeneFromUniProt(const char *uniprot_id) {
     //  URL, again it can be defined avobe, for now leave it here
     char url[512];
     snprintf(url, sizeof(url),
-        "https://rest.uniprot.org/uniprotkb/%s.json?fields=xref_ensembl",
+        "https://rest.uniprot.org/uniprotkb/%s.json?fields=xref_ensembl,xref_ensemblbacteria,xref_ensemblfungi,xref_ensemblmetazoa,xref_ensemblplants,xref_ensemblprotists",
+        //"https://rest.uniprot.org/uniprotkb/%s.json?fields=xref_ensemblbacteria", // just to try and see if it works for bacterias
         uniprot_id);
 
     // same approach as other fetches
@@ -359,7 +360,19 @@ char* fetchEnsemblGeneFromUniProt(const char *uniprot_id) {
                "key": "GeneId",
              "value": "ENSG00000141510.19" // instead of this , but with a few changes it could be done */ 
 
-    char *gene_tag = strstr(chunk.memory, "\"database\":\"Ensembl\""); //"\"key\":\"GeneId\"");
+    // char *gene_tag =    strstr(chunk.memory, "\"database\":\"Ensembl\"") ||
+    //                     strstr(chunk.memory, "\"database\":\"EnsemblBacteria\""); //"\"key\":\"GeneId\""); //Ensembl
+    
+    char *gene_tag = NULL; //NOW i start this as a NULL so I can loop over the different ensmbls!
+
+    if ((gene_tag = strstr(chunk.memory, "\"database\":\"Ensembl\"")) ||
+        (gene_tag = strstr(chunk.memory, "\"database\":\"EnsemblBacteria\"")) ||
+        (gene_tag = strstr(chunk.memory, "\"database\":\"EnsemblFungi\"")) ||
+        (gene_tag = strstr(chunk.memory, "\"database\":\"EnsemblMetazoa\"")) ||
+        (gene_tag = strstr(chunk.memory, "\"database\":\"EnsemblPlants\"")) ||
+        (gene_tag = strstr(chunk.memory, "\"database\":\"EnsemblProtists\""))) {
+        // gene_tag now points to the first occurrence found
+    }
     if (!gene_tag) {
         fprintf(stderr, "No \"GeneId\" found in JSON for %s\n", uniprot_id);
         free(chunk.memory);
