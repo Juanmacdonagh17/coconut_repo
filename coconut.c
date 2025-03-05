@@ -555,7 +555,7 @@ CA_Residue* parsePDBforCA(const char *pdbData, int *count) {
     int capacity = 100000;
     CA_Residue *resArray = malloc(sizeof(CA_Residue)*capacity);
     if (!resArray) {
-        fprintf(stderr, "Memory error in parsePDBforCA, is the proteins too big?\n");
+        fprintf(stderr, "Memory error in parsePDBforCA, is the protein too big?\n");
         return NULL;
     }
     int n = 0;
@@ -756,7 +756,7 @@ static int countContacts(const CA_Residue *res, Region rA, Region rB, float dist
     for (int i = rA.startIdx; i <= rA.endIdx; i++) {
         for (int j = rB.startIdx; j <= rB.endIdx; j++) {
             float d = dist(&res[i], &res[j]);
-            if (d <= distCutoff) {
+            if (d <= distCutoff) { // in main, currently 8 angstroms
                 contacts++;
             }
         }
@@ -772,18 +772,18 @@ void analyzeAndWriteFlexibleCSV(
     float contact_dist,      //  8.0 armstrongs 
     const char *csvFilename
 ) {
-    // 1) rigid/flexible classification
+    // 1) rigid/flexible classification, binnary clasification to start
     classifyFlexibleRigid(res, n, plddt_cutoff);
 
-    // 2) find flexible regions
+    // 2) find flexible regions (runs of 3 or more flexible residues)
     int flexRegionCount = 0;
     Region *flexRegs = findFlexibleRegions(res, n, minFlexibleRun, &flexRegionCount);
 
-    // 3) find rigid regions
+    // 3) find rigid regions (runs of 1 or more rigid residues)
     int rigidRegionCount = 0;
     Region *rigidRegs = findRigidRegions(res, n, minRigidRun, &rigidRegionCount);
 
-    // no rigid => pure IDP
+    // no rigid section in the whole protein => pure IDP
     if (rigidRegionCount == 0) {
         // mark all as pure_IDP
         for (int i = 0; i < n; i++) {
@@ -803,7 +803,7 @@ void analyzeAndWriteFlexibleCSV(
              If none => tail. If both => check contact >= 10 => loop, else => idr */
 
             // find R_left
-            int leftIdx = -1; 
+            int leftIdx  = -1; 
             int rightIdx = -1;
             for (int r = 0; r < rigidRegionCount; r++) {
                 if (rigidRegs[r].endIdx < fr.startIdx) {
@@ -1154,18 +1154,38 @@ void calculateMinMax(SequenceCodonCounts *seq, int window_size, const char *minm
         strncpy(codon_out, &seq->sequence[j * CODON_LENGTH], CODON_LENGTH);
         codon_out[CODON_LENGTH] = '\0';
 
-        int amino_index = getAminoAcidIndex(codon_out); // INDEX FUNCTION IS NOT APPENDING THE CORRECT CODON!!! 
-        char amino_name[4] = "Xaa";  // default unknown amino acid, maybe I can play a bit around here
-        if (amino_index >= 0 && amino_index < MAX_CODONS) {
-            if (amino_acids[amino_index] == '*') {
+        //int amino_index = getAminoAcidIndex(codon_out); // INDEX FUNCTION IS NOT APPENDING THE CORRECT CODON!!! 
+        // char amino_name[4] = "Xaa";  // default unknown amino acid, maybe I can play a bit around here
+        // if (amino_index >= 0 && amino_index < MAX_CODONS) {
+        //     if (amino_acids[amino_index] == '*') {
+        //         strcpy(amino_name, "*aa");
+        //     } else if (amino_index >= 0 && amino_index < 26) { // assuming 26 standard amino acids
+        //         amino_name[0] = amino_acids[amino_index];
+        //         // amino_name[1] = 'a';
+        //         // amino_name[2] = 'a';
+        //         amino_name[1] = '\0'; //3
+        //     }
+        // }
+        int codonIdx = -1;
+        for (int c = 0; c < MAX_CODONS; c++) {
+            if (strcmp(codons[c], codon_out) == 0) {
+                codonIdx = c;
+                break;
+            }
+        }       
+        char amino_name[4] = "Xaa";
+        if (codonIdx >= 0) {
+            char aa = amino_acids[codonIdx];
+            if (aa == '*') {
                 strcpy(amino_name, "*aa");
-            } else if (amino_index >= 0 && amino_index < 26) { // assuming 26 standard amino acids
-                amino_name[0] = amino_acids[amino_index];
-                // amino_name[1] = 'a';
-                // amino_name[2] = 'a';
-                amino_name[1] = '\0'; //3
+            } 
+            else {
+                // Put aa into amino_name[0] (or "aa" if desired)
+                amino_name[0] = aa;
+                amino_name[1] = '\0';
             }
         }
+
 
         // include Sequence ID in the output
         fprintf(minmax_output, "%s,%d,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f\n",
