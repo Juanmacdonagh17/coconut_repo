@@ -87,8 +87,8 @@ Using the -help flag will provide a list of all available commands, but here is 
 + -gene: fetches all versions of a transcript using a species and gene symbol as inputs.
   
 + -uniprot: fetches the main version of a transcript using the UniProt ID as an entry point.
-+ -af: fetches the pLDDT from the AF model, and it creates a naive structural assignation based on pLDDT and contacts from the PDB AF file. (For more context on how the regions are assigned, check references (5, 6).
-+ af_regions: fetches AlphaFold pLDDT data and slice regions to a file using UniProt ID
++ -af: fetches the pLDDT from the AF model, and it creates a naive structural assignation based on pLDDT and contacts from the PDB AF file. (For more context on how the regions are assigned, check references (5, 6). 
++ af_regions: fetches AlphaFold pLDDT data and slices regions to a file using UniProt ID. The output files also list the pLDDT values, the number of contacts and their positions, and their NFD (check reference X). After this, the CU and RSCU are also calculated for the assigned regions. 
 
 + -slice_domains: used to easily compare CU and RSCU between domains. It uses a file with "slice instructions" (find examples below, works with local files and with fetch).
   
@@ -191,6 +191,7 @@ To perform a minmax calculation with a fetch: both "a" and "*.fasta" work as pla
 | Perform RRT over the %MinMax                | ✅        |
 | Perform CU/RSCU over AF domain classifiation| ✅        |
 | Calculate CAI                               | ✅        |
+| Calculate NFD                               | ✅        |
 | Fetch domains from InterPro or CATH         | ❔        |
                                                       
 ---
