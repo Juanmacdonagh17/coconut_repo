@@ -100,6 +100,9 @@ typedef struct {
     int flexible;       // 1 = flexible, 0 = rigid
     char classification[16]; //  "rigid", "tail", "loop", "idr"
     int contactCount;
+    char contactPositions[1024]; // for the NDS, and also in general, it is usefull to store the contacts now :p
+
+    //float mmvals;
 } CA_Residue;
 
 typedef struct {
@@ -642,11 +645,20 @@ CA_Residue* parsePDBforCA(const char *pdbData, int *count) {
 void computeContactCounts(CA_Residue *arr, int n, float cutoff) {
     for (int i = 0; i < n; i++) {
         int count = 0;
+        arr[i].contactPositions[0] = '\0';
+
         for (int j = 0; j < n; j++) {
             if (i == j) continue;
             float d = dist(&arr[i], &arr[j]);
             if (d <= cutoff) {
                 count++;
+                // now to store the res of the contacts
+                char buf_contacts[32];
+                // use a ; to separate the contacts
+                sprintf(buf_contacts, "%d;", arr[j].residueNumber);
+
+                // array of positions
+                strcat(arr[i].contactPositions, buf_contacts);
             }
         }
         arr[i].contactCount = count;
@@ -862,13 +874,35 @@ void analyzeAndWriteFlexibleCSV(
         free(rigidRegs); // free the memory from the regions
         return;
     }
-    fprintf(fp, "residue,pLDDT,contacts,classification\n");
+    fprintf(fp, "residue,pLDDT,contacts,classification,NFD,contact_pos\n");
     for (int i = 0; i < n; i++) {
-        fprintf(fp, "%d,%.2f,%d,%s\n",
+
+        // native folding delay counts goes here. I just compute the distance between the residue and the last contact that its making
+        // if there are no contacts, the NFD is 0
+        // the semi colon makes it a bit messy 
+        int ndf = 0;
+        if (res[i].contactCount > 0 && strlen(res[i].contactPositions) > 0) {
+            char *lastSemicolon = strrchr(res[i].contactPositions, ';'); // the array always stops at a ; !! 
+            char *lastNumberStr = lastSemicolon ? (lastSemicolon + 1) : res[i].contactPositions;
+
+            while (lastSemicolon && *lastSemicolon == ';' && *(lastSemicolon + 1) == '\0') {
+                *lastSemicolon = '\0';  // remove the trailing ';'
+                lastSemicolon = strrchr(res[i].contactPositions, ';');
+            }
+            if (lastSemicolon) {
+                lastNumberStr = lastSemicolon + 1;
+            }
+            int lastContact = atoi(lastNumberStr); // make it an integer
+            ndf = abs(lastContact - res[i].residueNumber); // make it abs, if the last contact is 223 and the res is 224 the nfd is abs(223-224) = 1, not -1
+        }
+
+        fprintf(fp, "%d,%.2f,%d,%s,%d,%s\n",
                 res[i].residueNumber,
                 res[i].pLDDT,
                 res[i].contactCount,
-                res[i].classification);
+                res[i].classification,
+                ndf,
+                res[i].contactPositions);
     }
     fclose(fp);
 
@@ -1521,8 +1555,8 @@ void writeCaiCSV(const char *output_filename, const char *sequence_id, const cha
                  Codon_Ref_CAI *table, int nTable) {
     float cai = computeCAI(sequence, table, nTable);
     FILE *fp = fopen(output_filename, "a");
-        // for now this is here but eventually it needs to go down, so i can use the -silent flag             
-        fprintf(stdout,"CAI calculated for %s, value: %lf\n", sequence_id, cai);
+               
+        //fprintf(stdout,"CAI calculated for %s, value: %lf\n", sequence_id, cai);
 
     if (!fp) {
         fprintf(stderr, "Error opening CAI output file: %s\n", output_filename);
@@ -1618,10 +1652,10 @@ void parseSliceFile(const char *filename, SliceInstruction **instructions, int *
         if (token) temp_instructions[instr_count].end = atoi(token) - 1;    // zero-index
 
         // print parsed instruction in the console, should be skipped if -silent flag is used
-        printf("Parsed Instruction %d: Transcript_ID=%s, Domain_Name=%s, Start=%d, End=%d\n",
-               instr_count, temp_instructions[instr_count].transcript_id,
-               temp_instructions[instr_count].domain_name,
-               temp_instructions[instr_count].start, temp_instructions[instr_count].end);
+        // printf("Parsed Instruction %d: Transcript_ID=%s, Domain_Name=%s, Start=%d, End=%d\n",
+            //    instr_count, temp_instructions[instr_count].transcript_id,
+            //    temp_instructions[instr_count].domain_name,
+            //    temp_instructions[instr_count].start, temp_instructions[instr_count].end);
 
         instr_count++;
     }
@@ -1638,12 +1672,13 @@ void parseSliceFile(const char *filename, SliceInstruction **instructions, int *
 void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructions, int instr_count, FILE *output, bool calculate_cu, bool calculate_rscu, bool silent, bool calculate_minmax, int window_size, const char *output_filename) {    for (int i = 0; i < instr_count; i++) {
         if (strcmp(seq->id, instructions[i].transcript_id) == 0) {
 
-            printf("Matched Slice Instruction %d: Transcript_ID=%s\n", i, instructions[i].transcript_id);
+            // taking out all the printf from here, as they can't be run under the -silent flag that is delcared later...
+            //printf("Matched Slice Instruction %d: Transcript_ID=%s\n", i, instructions[i].transcript_id);
 
             int start_pos = instructions[i].start * CODON_LENGTH;
             int end_pos = instructions[i].end * CODON_LENGTH;
 
-            printf("Slicing: %s from %d to %d, positions %d to %d\n", instructions[i].transcript_id, instructions[i].start + 1, instructions[i].end + 1, start_pos, end_pos);
+            //printf("Slicing: %s from %d to %d, positions %d to %d\n", instructions[i].transcript_id, instructions[i].start + 1, instructions[i].end + 1, start_pos, end_pos);
 
             // validate slice bounds
             if (start_pos < 0 || end_pos > (int)strlen(seq->sequence) || start_pos >= end_pos) {
@@ -1666,8 +1701,8 @@ void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructi
 
             strncpy(sliced_sequence, seq->sequence + start_pos, slice_length);
             sliced_sequence[slice_length] = '\0';
-            printf("Sliced sequence: %s\n", sliced_sequence);
-            printf("\n");
+            //printf("Sliced sequence: %s\n", sliced_sequence);
+            //printf("\n");
 
 
             // process the sliced sequence
@@ -1703,16 +1738,15 @@ void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructi
                         *dotPtr = '\0';
                     }
                     if (strcmp(tempID, instructions[i].transcript_id) == 0) {
-                        // Matching: do your slicing
-                        printf("Matched Slice Instruction %d: Transcript_ID=%s\n", i, instructions[i].transcript_id);
+
+                        //printf("Matched Slice Instruction %d: Transcript_ID=%s\n", i, instructions[i].transcript_id);
 
                         int start_pos = instructions[i].start * CODON_LENGTH;
                         int end_pos = instructions[i].end * CODON_LENGTH;
 
-                        printf("Slicing: %s from %d to %d, positions %d to %d\n", 
-                                instructions[i].transcript_id, instructions[i].start + 1, instructions[i].end + 1, start_pos, end_pos);
+                        //printf("Slicing: %s from %d to %d, positions %d to %d\n", 
+                                //instructions[i].transcript_id, instructions[i].start + 1, instructions[i].end + 1, start_pos, end_pos);
 
-                        // Validate slice bounds...
                         if (start_pos < 0 || end_pos > (int)strlen(seq->sequence) || start_pos >= end_pos) {
                             fprintf(stderr, "Invalid slicing bounds for %s: start=%d, end=%d\n",
                                     seq->id, instructions[i].start + 1, instructions[i].end + 1);
@@ -1734,8 +1768,8 @@ void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructi
 
                         strncpy(sliced_sequence, seq->sequence + start_pos, slice_length);
                         sliced_sequence[slice_length] = '\0';
-                        printf("Sliced sequence: %s\n", sliced_sequence);
-                        printf("\n");
+                        // printf("Sliced sequence: %s\n", sliced_sequence);
+                        // printf("\n");
 
                         // Process the sliced sequence as before
                         SequenceCodonCounts slicedSeq;
@@ -1820,7 +1854,7 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
             srand((unsigned)time(NULL));
             // because this is here, I can't really use the silent flag to skip the output text 
             fprintf(stdout, "Calculating RRT minmax profile for %s\n", minmax_output_filename);
-            // Specify how many iterations you want (e.g., 200)
+            // the number of iteration can be changed here if needed! 
             int iterations = 1000;
             int rrtProfileLength = 0;
             char *rrt_output_filename = malloc(strlen(minmax_output_filename) + 5);
@@ -1829,12 +1863,12 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
                 fprintf(stderr, "Error computing RRT minmax profile.\n");
             } else {
                 sprintf(rrt_output_filename, "rrt_%s", minmax_output_filename);
-                // Write the profile to a file
+
                 FILE *fp = fopen(rrt_output_filename, "w");
                 if (!fp) {
                     fprintf(stderr, "Error opening RRT output file: %s\n", "rrt_output_filename.csv");
                 } else {
-                    fprintf(fp, "position,AvgMinMax\n");
+                    fprintf(fp, "position,rrt\n");
                     for (int i = 0; i < rrtProfileLength; i++) {
                         // Optionally, compute the residue number corresponding to window i
                         int aa_index = i + 1;
@@ -1887,6 +1921,59 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
         // process each sliced sequence
         sliceAndWriteSequence(&currentSequence, instructions, slice_count, output, calculate_cu, calculate_rscu, silent, calculate_minmax, window_size, output_filename);
     }
+}
+
+
+
+int mergeSideBySide(const char *file1, const char *file2, const char *file3, const char *outFile) {
+    FILE *f1 = fopen(file1, "r");
+    FILE *f2 = fopen(file2, "r");
+    FILE *f3 = fopen(file3, "r");
+
+    FILE *fo = fopen(outFile, "w");
+    if (!fo) { fclose(f1); fclose(f2); fprintf(stderr, "Failed to open %s for writing\n", outFile); return 1; }
+
+    char line1[1024], line2[1024], line3[1024];
+
+    // read line by line
+    while (1) {
+        char *p1 = fgets(line1, sizeof(line1), f1);
+        char *p2 = fgets(line2, sizeof(line2), f2);
+        char *p3 = fgets(line3, sizeof(line2), f3);
+
+        if (!p1 && !p2 && !p3) {
+            // 3 files ended
+            break;
+        }
+
+        if (p1) {
+            line1[strcspn(line1, "\r\n")] = '\0';
+        } else {
+            line1[0] = '\0';
+        }
+
+        // file 2 and 3 are always shorter than file 1, becasue of the minmax function
+        // so we just go with null terms at their end
+        if (p2) {
+            line2[strcspn(line2, "\r\n")] = '\0';
+        } else {
+            line2[0] = '\0';
+        }
+
+        if (p3) {
+            line3[strcspn(line3, "\r\n")] = '\0';
+        } else {
+            line3[0] = '\0';
+        }
+        // combine all into 1 file
+        fprintf(fo, "%s,%s,%s\n", line1, line2, line3);
+    }
+
+    fclose(f1);
+    fclose(f2);
+    fclose(f3);
+    fclose(fo);
+    return 0;
 }
 
 // ping to see if ensemble is up. is could do the same for af and up, but i don't think it's necessary
@@ -2240,7 +2327,7 @@ int main(int argc, char *argv[]) {
             return 1;
         }
         // Write header
-        fprintf(minmax_output, "ID,position,codon,aminoacid,usage,max,min,ave,minmax\n");
+        fprintf(minmax_output, "ID,residue,codon,aminoacid,usage,max,min,ave,minmax\n");
         fclose(minmax_output);
     }   
  
@@ -2521,6 +2608,23 @@ int main(int argc, char *argv[]) {
         fclose(input);
     }
 
+    if (slice_alphafold && calculate_minmax && calculate_rtt) {
+
+        char af_csv_name_merge[512];
+        char rrt_output_filename_merge[512];
+        snprintf(af_csv_name_merge, sizeof(af_csv_name_merge), "%s_pLDDT.csv", uniprot_id);
+        sprintf(rrt_output_filename_merge, "rrt_%s", minmax_output_filename);
+
+        char final_global_file[512];
+        sprintf(final_global_file, "global_af_mm_rrt_%s.csv", uniprot_id);
+
+        printf("Final global file saved at: %s\n", final_global_file);
+
+        mergeSideBySide(af_csv_name_merge, minmax_output_filename, rrt_output_filename_merge, final_global_file);
+
+
+
+    }
     // free and close stuff 
 
     if (output) {
