@@ -244,9 +244,6 @@ char* fetchGeneID(const char *species, const char *geneName) {
         return NULL;
     }
 
-    // debbuing just in case
-    //fprintf(stderr, "\n[DEBUG] Full JSON response:\n%s\n\n", chunk.memory);
-
     curl_easy_cleanup(curl_handle);
     curl_global_cleanup();
 
@@ -297,31 +294,29 @@ char* fetchGeneID(const char *species, const char *geneName) {
 
     return ensg_id; // free() this after use
 }
-
-// fetch using uniprot as an entry point 
+// fetch Ensembl transcript ID from UniProt ID
+// The CC coment is necesary to select the correct isoform!!
+// also all of the different Ensembl db's are used in the request
 
 char* fetchEnsemblGeneFromUniProt(const char *uniprot_id) {
-    //  URL, again it can be defined avobe, for now leave it here
+    const char *ensembl_tags[] = {
+        "Ensembl", "EnsemblBacteria", "EnsemblFungi",
+        "EnsemblMetazoa", "EnsemblPlants", "EnsemblProtists"
+    };
+    int num_tags = sizeof(ensembl_tags) / sizeof(ensembl_tags[0]);
+
     char url[512];
     snprintf(url, sizeof(url),
-        "https://rest.uniprot.org/uniprotkb/%s.json?fields=xref_ensembl,xref_ensemblbacteria,xref_ensemblfungi,xref_ensemblmetazoa,xref_ensemblplants,xref_ensemblprotists",
-        //"https://rest.uniprot.org/uniprotkb/%s.json?fields=xref_ensemblbacteria", // just to try and see if it works for bacterias
+         "https://rest.uniprot.org/uniprotkb/%s.json?fields=xref_ensembl,xref_ensemblbacteria,xref_ensemblfungi,xref_ensemblmetazoa,xref_ensemblplants,xref_ensemblprotists,cc_alternative_products",
         uniprot_id);
 
-    // same approach as other fetches
     CURL *curl_handle;
     CURLcode res;
-    struct MemoryStruct chunk;
-    chunk.memory = malloc(1);
-    chunk.size = 0;
+    struct MemoryStruct chunk = { malloc(1), 0 };
 
     curl_global_init(CURL_GLOBAL_ALL);
     curl_handle = curl_easy_init();
-    if (!curl_handle) {
-        fprintf(stderr, "Failed to init curl\n");
-        free(chunk.memory);
-        return NULL;
-    }
+    if (!curl_handle) return NULL;
 
     curl_easy_setopt(curl_handle, CURLOPT_URL, url);
     curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
@@ -329,101 +324,184 @@ char* fetchEnsemblGeneFromUniProt(const char *uniprot_id) {
     curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "libcurl-agent/1.0");
 
     res = curl_easy_perform(curl_handle);
-    if(res != CURLE_OK) {
-        fprintf(stderr, "curl_easy_perform() failed: %s\n", curl_easy_strerror(res));
-        curl_easy_cleanup(curl_handle);
-        curl_global_cleanup();
-        free(chunk.memory);
-        return NULL;
-    }
-
     curl_easy_cleanup(curl_handle);
     curl_global_cleanup();
 
-    // just in case, debbuging 
-    //fprintf(stderr, "[DEBUG] Full JSON:\n%s\n", chunk.memory);
+    if (res != CURLE_OK || chunk.memory == NULL) {
+        free(chunk.memory);
+        return NULL;
+    }
 
-    /*  naive scanning for: "key":"GeneId", also here the json parsing is "by hand", maybe a library is better? 
-     something like: "key":"GeneId","value":"ENSG00000142192.22"
-     this can be switched to look for the ENSG instead of the ENST, but it makes less sense, as you have 1 protein, 1 af model, you would want 1 transcript
-     in the json: 
-     {
-       "entryType": "UniProtKB reviewed (Swiss-Prot)",
-       "primaryAccession": "P04637",
-       "uniProtKBCrossReferences": [
-         {
-           "database": "Ensembl",
-           "id": "ENST00000269305.9", // i look for this
-           "properties": [
-             {
-               "key": "ProteinId",
-               "value": "ENSP00000269305.4"
-             },
-             {
-               "key": "GeneId",
-             "value": "ENSG00000141510.19" // instead of this , but with a few changes it could be done */ 
-
-    // char *gene_tag =    strstr(chunk.memory, "\"database\":\"Ensembl\"") ||
-    //                     strstr(chunk.memory, "\"database\":\"EnsemblBacteria\""); //"\"key\":\"GeneId\""); //Ensembl
+    // this is a very home made approach
+    // all of this just not to use a json parser, so there's no extra need for libraries 
     
-    char *gene_tag = NULL; //NOW i start this as a NULL so I can loop over the different ensmbls!
 
-    if ((gene_tag = strstr(chunk.memory, "\"database\":\"Ensembl\"")) ||
-        (gene_tag = strstr(chunk.memory, "\"database\":\"EnsemblBacteria\"")) ||
-        (gene_tag = strstr(chunk.memory, "\"database\":\"EnsemblFungi\"")) ||
-        (gene_tag = strstr(chunk.memory, "\"database\":\"EnsemblMetazoa\"")) ||
-        (gene_tag = strstr(chunk.memory, "\"database\":\"EnsemblPlants\"")) ||
-        (gene_tag = strstr(chunk.memory, "\"database\":\"EnsemblProtists\""))) {
-        // gene_tag now points to the first occurrence found
+    // get the isoform list
+    char *cursor = chunk.memory;
+    char *displayed_isoform = NULL;
+    char *isoforms_start = strstr(chunk.memory, "\"isoforms\"");
+
+    if (isoforms_start) {
+    
+        char *cursor = strchr(isoforms_start, '{');
+        while (cursor) {
+            char *block_start = cursor;
+            int brace_count = 1;
+            cursor++;
+
+            while (brace_count > 0 && *cursor) {
+                if (*cursor == '{') brace_count++;
+                else if (*cursor == '}') brace_count--;
+                cursor++;
+            }
+
+            if (brace_count != 0) break;  // malformed JSON
+
+            size_t block_len = cursor - block_start;
+            char *block = malloc(block_len + 1);
+            strncpy(block, block_start, block_len);
+            block[block_len] = '\0';
+
+            // the "main" or canonical isoform has the "Displayed" tag
+            if (strstr(block, "\"isoformSequenceStatus\":\"Displayed\"")) {
+                // extract the id
+                char *id_start = strstr(block, "\"isoformIds\":[\"");
+                if (id_start) {
+                    id_start += strlen("\"isoformIds\":[\"");
+                    char *id_end = strchr(id_start, '\"');
+                    if (id_end) {
+                        size_t iso_len = id_end - id_start;
+                        displayed_isoform = malloc(iso_len + 1);
+                        strncpy(displayed_isoform, id_start, iso_len);
+                        displayed_isoform[iso_len] = '\0';
+
+                        free(block);
+                        break;  // found it
+                    }
+                }
+            }
+
+            free(block);
+        }
     }
-    if (!gene_tag) {
-        fprintf(stderr, "No \"GeneId\" found in JSON for %s\n", uniprot_id);
+
+    // now, if there's a displayed isoform, we just look for the first appreance of an ENT id
+    // according to the UniProt team (and my experience so far) the order does not really matter if all of the ENT belong to the canonical isoform
+    // the main difference are only intros, that we do not care about here
+
+    if (displayed_isoform) {
+        cursor = chunk.memory;
+        char *match_block = NULL;
+
+    while ((cursor = strstr(cursor, "\"database\":\""))) {
+            int valid = 0;
+            for (int i = 0; i < num_tags; i++) {
+            if (strncmp(cursor + strlen("\"database\":\""), ensembl_tags[i], strlen(ensembl_tags[i])) == 0) {
+                    valid = 1;
+                    break;
+                }
+            }
+            if (!valid) {
+                cursor++;
+                continue;
+            }
+
+            char *iso_tag = strstr(cursor, "\"isoformId\":\"");
+            if (!iso_tag) {
+                cursor++;
+                continue;
+            }
+
+            iso_tag += strlen("\"isoformId\":\"");
+            if (strncmp(iso_tag, displayed_isoform, strlen(displayed_isoform)) != 0) {
+                cursor++;
+                continue;
+            }
+
+            match_block = cursor;
+            break;
+        }
+
+        free(displayed_isoform);
+        // get rid of the iso id, get the ens, move on. ENS is the "soft" part, ENST, ENMUST, etc are the specific ids for diff orgs. In general this should work?
+        if (match_block) {
+        char *id_field = strstr(match_block, "\"id\":\"ENS");
+            if (!id_field) {
+                free(chunk.memory);
+                return NULL;
+            }
+
+            id_field += strlen("\"id\":\"");
+            char *id_end = strchr(id_field, '\"');
+
+            if (!id_end) {
+                free(chunk.memory);
+                return NULL;
+            }
+
+            size_t id_len = id_end - id_field;
+            char *ensg_id = malloc(id_len + 1);
+            strncpy(ensg_id, id_field, id_len);
+            ensg_id[id_len] = '\0';
+
+            // strip version, we don't need the version part
+            char *dot_ptr = strchr(ensg_id, '.');
+            if (dot_ptr) {
+                *dot_ptr = '\0';
+            }
+
+            free(chunk.memory);
+            return ensg_id;
+        }
+    }
+
+    // if no isoform or Displayed tag is found, get first Ensembl-like entry
+    cursor = chunk.memory;
+    while ((cursor = strstr(cursor, "\"database\":\""))) {
+        int valid = 0;
+        for (int i = 0; i < num_tags; i++) {
+            if (strncmp(cursor + 12, ensembl_tags[i], strlen(ensembl_tags[i])) == 0) {
+                valid = 1;
+                break;
+            }
+        }
+        if (!valid) {
+            cursor++;
+            continue;
+        }
+
+        char *id_field = strstr(cursor, "\"id\":\"");
+        if (!id_field) {
+            cursor++;
+            continue;
+        }
+
+        id_field += strlen("\"id\":\"");
+        char *id_end = strchr(id_field, '\"');
+        if (!id_end) {
+            cursor++;
+            continue;
+        }
+
+        size_t id_len = id_end - id_field;
+        char *fallback_id = malloc(id_len + 1);
+        strncpy(fallback_id, id_field, id_len);
+        fallback_id[id_len] = '\0';
+
+        char *dot_ptr = strchr(fallback_id, '.');
+        if (dot_ptr) {
+            *dot_ptr = '\0';
+        }
+
         free(chunk.memory);
-        return NULL;
+        return fallback_id;
     }
-
-    // find the next "value":"...ENS...." 
-    // the ENS is key, as different species use different endings! 
-    char *val_field = strstr(gene_tag, "\"id\":\"");
-    if (!val_field) {
-        fprintf(stderr, "No \"value\" found after GeneId\n");
-        free(chunk.memory);
-        return NULL;
-    }
-
-    // skipponng here the 9 char for "value":" or the 6 for "id":"
-    val_field += 6; //9
-
-    // read until next quote, this is the ENS gene ID
-    char *end_quote = strchr(val_field, '\"');
-    if (!end_quote) {
-        fprintf(stderr, "Malformed JSON while reading GeneId\n");
-        free(chunk.memory);
-        return NULL;
-    }
-
-    size_t id_len = end_quote - val_field;
-    char *ensg_id = malloc(id_len + 1);
-    if (!ensg_id) {
-        fprintf(stderr, "Memory allocation failed for ensg_id\n");
-        free(chunk.memory);
-        return NULL;
-    }
-
-    strncpy(ensg_id, val_field, id_len);
-    ensg_id[id_len] = '\0';
 
     free(chunk.memory);
-
-    // strip version from ensg_id if it has .NN at the end, with out this the fetch will fail
-    // "ENST00000142192.22" => "ENST00000142192"
-    char *dotPtr = strchr(ensg_id, '.');
-    if (dotPtr) {
-        *dotPtr = '\0';
-    }
-
-    return ensg_id;
+    return NULL;
 }
+
+
 
 ////////////////////////
 // AF & pLDDT f(x):   //
@@ -2418,7 +2496,7 @@ int main(int argc, char *argv[]) {
                             writeRegionSlices(arr, nRes, ensgID, af_regions_csv_name);
 
                             slice_sequence = true;
-                            slice_filename = af_regions_csv_name;
+                            slice_filename = strdup(af_regions_csv_name);
                         }
 
                         free(arr);
