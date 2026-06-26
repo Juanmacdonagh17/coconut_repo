@@ -2657,7 +2657,7 @@ int main(int argc, char *argv[]) {
                 if (active) {
                     // process the previous sequence
                     processSequence(currentSequence.sequence, currentSequence.id, output, calculate_cu, calculate_rscu, 
-                                    calculate_minmax, window_size, minmax_output_filename,output_filename, 
+                                    calculate_minmax, window_size, output_filename, minmax_output_filename, 
                                     silent, slice_sequence, slice_filename, calculate_cai, cai_reference_filename,global_cai_table, n_cai_table,
                                     calculate_rtt);
                 }
