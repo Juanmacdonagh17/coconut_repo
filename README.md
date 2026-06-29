@@ -158,7 +158,7 @@ If you want to perform the RRT over the sequence:
 ./coconut -rrt -minmax Usage-num3.man ENST00000372979
 ```
 Or in a transcript that is fetched:
-
+    
 ```bash
 ./coconut -rrt -fetch ENST00000372979 -minmax Usage-num3.man ENST00000372979.csv
 ```

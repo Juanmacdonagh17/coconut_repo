@@ -1,5 +1,3 @@
-
-
 /////////////////////////
 //        libs         //
 /////////////////////////
@@ -733,10 +731,23 @@ void computeContactCounts(CA_Residue *arr, int n, float cutoff) {
                 // now to store the res of the contacts
                 char buf_contacts[32];
                 // use a ; to separate the contacts
-                sprintf(buf_contacts, "%d;", arr[j].residueNumber);
+                // sprintf(buf_contacts, "%d;", arr[j].residueNumber);
 
-                // array of positions
-                strcat(arr[i].contactPositions, buf_contacts);
+                // // array of positions
+                // strcat(arr[i].contactPositions, buf_contacts);
+                snprintf(buf_contacts, sizeof(buf_contacts), "%d;", arr[j].residueNumber);
+
+                // bounded append: never write past contactPositions[]
+                size_t used = strlen(arr[i].contactPositions);
+                size_t room = sizeof(arr[i].contactPositions) - used - 1; // space left, minus NUL
+                if (strlen(buf_contacts) > room) {
+                    fprintf(stderr,
+                        "Warning: contact list for residue %d truncated (buffer full)\n",
+                        arr[i].residueNumber);
+                    break; // stop adding contacts for this residue if it's too large
+                }
+                strncat(arr[i].contactPositions, buf_contacts, room);
+
             }
         }
         arr[i].contactCount = count;
@@ -1497,8 +1508,7 @@ float* computeMinMaxProfile(const char *sequence, int window_size, int *profileL
 
 // here we just call the RRT sequence generator and the minmax profile calculator
 
-float* computeRRTMinMaxProfile(const char *sequence, Codon_Ref_CAI *table, int nTable, int window_size, int iterations, int *profileLength) {
-    int len = strlen(sequence);
+float* computeRRTMinMaxProfile(const char *sequence, int window_size, int iterations, int *profileLength) {    int len = strlen(sequence);
     int numCodons = len / 3;
     int nWindows = numCodons - window_size + 1;
     *profileLength = nWindows;
@@ -1747,8 +1757,21 @@ void parseSliceFile(const char *filename, SliceInstruction **instructions, int *
    a sequence that has 30 nt, has 10 codons, and so 10 Aa. If you use "30" for the last Aa, it will raise an out of bounds error
    maybe add a flag for this? */
 
-void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructions, int instr_count, FILE *output, bool calculate_cu, bool calculate_rscu, bool silent, bool calculate_minmax, int window_size, const char *output_filename) {    for (int i = 0; i < instr_count; i++) {
-        if (strcmp(seq->id, instructions[i].transcript_id) == 0) {
+void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructions, int instr_count, FILE *output, bool calculate_cu, bool calculate_rscu, bool silent, bool calculate_minmax, int window_size, const char *minmax_output_filename) {
+    static bool domains_minmax_started = false;
+    char domains_minmax_filename[1024] = "";
+    if (calculate_minmax && minmax_output_filename) {
+        size_t blen = strlen(minmax_output_filename);
+        if (blen >= 11) blen -= 11;
+        snprintf(domains_minmax_filename, sizeof(domains_minmax_filename), "%.*s_domains_minmax.csv", (int)blen, minmax_output_filename);
+        if (!domains_minmax_started) {
+            FILE *dh = fopen(domains_minmax_filename, "w");
+            if (dh) { fprintf(dh, "ID,residue,codon,aminoacid,usage,max,min,ave,minmax\n"); fclose(dh); }
+            domains_minmax_started = true;
+        }
+    }
+    for (int i = 0; i < instr_count; i++) {
+        if (strcmp(seq->id, instructions[i].transcript_id) == 0) {    
 
             // taking out all the printf from here, as they can't be run under the -silent flag that is delcared later...
             //printf("Matched Slice Instruction %d: Transcript_ID=%s\n", i, instructions[i].transcript_id);
@@ -1801,6 +1824,9 @@ void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructi
             }
 
             writeCsvRow(output, &slicedSeq, calculate_cu, calculate_rscu);
+            if (calculate_minmax) {
+                calculateMinMax(&slicedSeq, window_size, domains_minmax_filename);
+            }
 
             // free the allocated memory for sliced_sequence
             free(sliced_sequence);
@@ -1867,11 +1893,14 @@ void sliceAndWriteSequence(SequenceCodonCounts *seq, SliceInstruction *instructi
                         }
 
                         writeCsvRow(output, &slicedSeq, calculate_cu, calculate_rscu);
+                        if (calculate_minmax) {
+                            calculateMinMax(&slicedSeq, window_size, domains_minmax_filename);
+                        }
 
                         free(sliced_sequence);
         
                 } else {
-                        printf("No match for Slice Instruction %d: Transcript_ID=%s with Sequence ID=%s\nRemember that ID's should match between files!!!!\n", i, instructions[i].transcript_id, seq->id);
+                        if (!silent) printf("No match for Slice Instruction %d: Transcript_ID=%s with Sequence ID=%s\nRemember that ID's should match between files!!!!\n", i, instructions[i].transcript_id, seq->id);
                 }
             }
         }
@@ -1931,12 +1960,14 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
             
             srand((unsigned)time(NULL));
             // because this is here, I can't really use the silent flag to skip the output text 
-            fprintf(stdout, "Calculating RRT minmax profile for %s\n", minmax_output_filename);
+            if (!silent) {
+                fprintf(stdout, "Calculating RRT minmax profile for %s\n", minmax_output_filename);
+            }
             // the number of iteration can be changed here if needed! 
             int iterations = 1000;
             int rrtProfileLength = 0;
             char *rrt_output_filename = malloc(strlen(minmax_output_filename) + 5);
-            float *rrtProfile = computeRRTMinMaxProfile(currentSequence.sequence, global_cai_table, n_cai_table, window_size, iterations, &rrtProfileLength);
+            float *rrtProfile = computeRRTMinMaxProfile(currentSequence.sequence, window_size, iterations, &rrtProfileLength);
             if (!rrtProfile) {
                 fprintf(stderr, "Error computing RRT minmax profile.\n");
             } else {
@@ -1944,7 +1975,7 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
 
                 FILE *fp = fopen(rrt_output_filename, "w");
                 if (!fp) {
-                    fprintf(stderr, "Error opening RRT output file: %s\n", "rrt_output_filename.csv");
+                    fprintf(stderr, "Error opening RRT output file: %s\n", rrt_output_filename);
                 } else {
                     fprintf(fp, "position,rrt\n");
                     for (int i = 0; i < rrtProfileLength; i++) {
@@ -1957,10 +1988,10 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
                 free(rrtProfile);
                 // fprintf(stdout, "Done!\n");
             }
+            free(rrt_output_filename);
         }
-
     }
-
+    
     if (calculate_cai) {
 
 
@@ -1997,7 +2028,7 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
         }
 
         // process each sliced sequence
-        sliceAndWriteSequence(&currentSequence, instructions, slice_count, output, calculate_cu, calculate_rscu, silent, calculate_minmax, window_size, output_filename);
+        sliceAndWriteSequence(&currentSequence, instructions, slice_count, output, calculate_cu, calculate_rscu, silent, calculate_minmax, window_size, minmax_output_filename);
     }
 }
 
@@ -2008,6 +2039,15 @@ int mergeSideBySide(const char *file1, const char *file2, const char *file3, con
     FILE *f2 = fopen(file2, "r");
     FILE *f3 = fopen(file3, "r");
 
+    if (!f1 || !f2 || !f3) {
+        if (f1) fclose(f1);
+        if (f2) fclose(f2);
+        if (f3) fclose(f3);
+        fprintf(stderr, "Failed to open one of the input files: %s / %s / %s\n",
+                file1, file2, file3);
+        return 1;
+    }
+
     FILE *fo = fopen(outFile, "w");
     if (!fo) { fclose(f1); fclose(f2); fprintf(stderr, "Failed to open %s for writing\n", outFile); return 1; }
 
@@ -2017,7 +2057,7 @@ int mergeSideBySide(const char *file1, const char *file2, const char *file3, con
     while (1) {
         char *p1 = fgets(line1, sizeof(line1), f1);
         char *p2 = fgets(line2, sizeof(line2), f2);
-        char *p3 = fgets(line3, sizeof(line2), f3);
+        char *p3 = fgets(line3, sizeof(line3), f3);
 
         if (!p1 && !p2 && !p3) {
             // 3 files ended
@@ -2110,9 +2150,9 @@ int main(int argc, char *argv[]) {
     bool calculate_rtt = false;  // calculate random reverse translations
 
     int window_size = 18;      // default window size for minmax
-    int slice_count = 0;      // number of slice instructions starts at 0
+    // int slice_count = 0;      // number of slice instructions starts at 0
     int n_cai_table = 0;
-    int n_rtt = 1000;       // default number of random reverse translations, but i should try a lot more 
+    // int n_rtt = 1000;       // default number of random reverse translations, but i should try a lot more 
 
     char *codon_usage_filename = NULL;
     char *slice_filename = NULL;  
@@ -2127,7 +2167,7 @@ int main(int argc, char *argv[]) {
     char *cai_reference_filename = NULL; // CAI reference table
 
     // variable declarations for slicing
-    SliceInstruction *instructions = NULL;
+    // SliceInstruction *instructions = NULL;
    
 
     /* the order for the inputs and outputs files is a bit tricky. If there's something out of place, it would name the ouptut as the slice file, etc etc
@@ -2231,21 +2271,13 @@ int main(int argc, char *argv[]) {
                 i += 1; } 
 
         } else if (strcmp(argv[i], "-minmax") == 0) {
-            if (i + 2 < argc) {
+            if (i + 1 < argc) {
                 calculate_minmax = true;
                 codon_usage_filename = argv[++i];   // table file
-                input_filename = argv[++i];         // fasta file
                 // minmax  does not requiers an output file name
-                // check if the next argument is a number (window size)
-                if (i + 1 < argc && isdigit(argv[i + 1][0])) {
-                    window_size = atoi(argv[++i]);
-                } else {
-
-                 fprintf(stderr, "Using default codon window size: 18\n");
-                }
-
+                // the input fasta (local mode) and optional window are read as positionals below
             } else {
-                fprintf(stderr, "Error: Codon usage file and input fasta file must be specified with -minmax flag.\n");
+                fprintf(stderr, "Error: a codon usage table must be specified with -minmax flag.\n");
                 return 1;
             }
 
@@ -2287,7 +2319,7 @@ int main(int argc, char *argv[]) {
             printf("  -slice_domains <slice_instruction_file>    \tSlice fasta into domains using a CSV-style file (requires slice file name, works with input and all fetches)\n");
             printf("   \t\n");
             printf("  -minmax <codon_usage_file> [window_size]\tCalculate min-max percentage over specified window size (default 18).\n");
-            printf("  -rtt\t Calculate the Random Reverse Translations for the MinMax input sequence (1000 iterations)\n");
+            printf("  -rrt\t Calculate the Random Reverse Translations for the MinMax input sequence (1000 iterations)\n");
             printf("   \t\n");
             printf("   \t\n");
             printf("   \t\n");
@@ -2297,6 +2329,8 @@ int main(int argc, char *argv[]) {
             printf("   \t\n");
             return 0;
 
+        } else if (calculate_minmax && !output_filename && isdigit((unsigned char)argv[i][0])) {
+            window_size = atoi(argv[i]);
         } else if (!input_filename) {
             input_filename = argv[i];
         } else if (!output_filename) {
@@ -2347,7 +2381,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (calculate_rtt && !calculate_minmax) {
-        fprintf(stderr, "Error: -rtt  can only be used if -minmax is also used.\n");
+        fprintf(stderr, "Error: -rrt  can only be used if -minmax is also used.\n");
         return 1;
     }
 
@@ -2409,7 +2443,7 @@ int main(int argc, char *argv[]) {
         fclose(minmax_output);
     }   
  
-    char *sequence_data = NULL;
+    // char *sequence_data = NULL;
 
 
     //      //
@@ -2576,8 +2610,18 @@ int main(int argc, char *argv[]) {
                 currentSequence.sequence[0] = '\0';  
             } else if (active && strlen(line) > 0) {
 
-                strcat(currentSequence.sequence, line);
-            }
+                if (strlen(currentSequence.sequence) + strlen(line) >= MAX_SEQUENCE_LENGTH) {
+                    fprintf(stderr,
+                        "Warning: sequence '%s' exceeds MAX_SEQUENCE_LENGTH (%d); truncated\n",
+                        currentSequence.id, MAX_SEQUENCE_LENGTH);
+                } else {
+                    strcat(currentSequence.sequence, line);
+                }
+            }                
+            // } else if (active && strlen(line) > 0) {
+
+            //     strcat(currentSequence.sequence, line);
+            // }
             line = strtok(NULL, "\n");
         }      
         // process the fetched sequence
@@ -2642,7 +2686,7 @@ int main(int argc, char *argv[]) {
 
             fprintf(stderr, "Failed to open input file: %s\n", input_filename);
 
-            fclose(output);
+            if (output) fclose(output);
             return 1;
         }
 
@@ -2666,13 +2710,27 @@ int main(int argc, char *argv[]) {
                 currentSequence.id[sizeof(currentSequence.id) - 1] = '\0';
                 initializeCodonCounts(&currentSequence);
                 active = true;
-            } else if (active && strlen(line) > 0) {
-                // accumulate sequence data
-                for (int i = 0; line[i]; i++) {
-                    line[i] = toupper(line[i]);  // convert to uppercase
+                } else if (active && strlen(line) > 0) {
+                    // accumulate sequence data
+                    for (int i = 0; line[i]; i++) {
+                        line[i] = toupper(line[i]);  // convert to uppercase
+                    }
+
+                    if (strlen(currentSequence.sequence) + strlen(line) >= MAX_SEQUENCE_LENGTH) {
+                        fprintf(stderr,
+                            "Warning: sequence '%s' exceeds MAX_SEQUENCE_LENGTH (%d); truncated\n",
+                            currentSequence.id, MAX_SEQUENCE_LENGTH);
+                    } else {
+                        strcat(currentSequence.sequence, line);
+                    }
                 }
-                strcat(currentSequence.sequence, line);
-            }
+            // } else if (active && strlen(line) > 0) {    
+            //     // accumulate sequence data
+            //     for (int i = 0; line[i]; i++) {
+            //         line[i] = toupper(line[i]);  // convert to uppercase
+            //     }
+            //     strcat(currentSequence.sequence, line);
+            // }
         }
 
         // process the last sequence
@@ -2721,10 +2779,3 @@ int main(int argc, char *argv[]) {
     return 0;
 
 }
-
-
-
-
-
-
-
