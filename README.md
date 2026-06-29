@@ -158,14 +158,14 @@ If you want to perform the RRT over the sequence:
 ./coconut -rrt -minmax Usage-num3.man ENST00000372979
 ```
 Or in a transcript that is fetched:
-    
+
 ```bash
 ./coconut -rrt -fetch ENST00000372979 -minmax Usage-num3.man ENST00000372979.csv
 ```
-To perform a minmax calculation with a fetch: both "a" and "*.fasta" work as placeholders for parsing the arguments, this will be fixed soon:
+To perform a minmax calculation with a fetch: "*.csv" work as placeholders for parsing the arguments in case CU/RSCU/slice is also used:
 
 ```bash
-./coconut  -uniprot Q4KMZ1 a -af -rrt -minmax codon_table_minmax_hsapiens Q4KMZ1.fasta
+./coconut -uniprot Q4KMZ1 Q4KMZ1.csv -af -rrt -minmax codon_table_minmax_hsapiens
 ```
 
 ---

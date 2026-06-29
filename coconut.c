@@ -2419,13 +2419,19 @@ int main(int argc, char *argv[]) {
         if (!silent) {
             printf("Codon usage data loaded successfully.\n");
         }
-        // generate output filename based on input_filename
-        char *dot = strrchr(input_filename, '.');
+        // generate output filename based on input_filename (or output_filename when fetching)
+        const char *minmax_base = input_filename ? input_filename : output_filename;
+        if (!minmax_base) {
+            fprintf(stderr, "Error: -minmax needs an input file or an output name to derive the result filename.\n");
+            if (output) fclose(output);
+            return 1;
+        }
+        char *dot = strrchr(minmax_base, '.');
         char *base_filename = NULL;
         if (dot) {
-            base_filename = strndup(input_filename, dot - input_filename);
+            base_filename = strndup(minmax_base, dot - minmax_base);
         } else {
-            base_filename = strdup(input_filename);
+            base_filename = strdup(minmax_base);
         }
         minmax_output_filename  = malloc(strlen(base_filename) + 13); // '_minmax.out' + null terminator
         sprintf(minmax_output_filename, "%s_minmax.csv", base_filename);
