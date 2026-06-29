@@ -43,7 +43,7 @@ After that, just run the following command:
 ```bash
 git clone https://github.com/Juanmacdonagh17/coconut_repo
 cd coconut_repo
-gcc -o coconut coconut.c -I/home/path/to/miniconda3/include -L/home/path/to/miniconda3/lib -lcurl
+gcc -o coconut coconut.c -I/home/path/to/miniconda3/include -L/home/path/to/miniconda3/lib -lcurl -lm
 
 ```
 Replace /path/to with the path  where miniconda was installed.
@@ -134,7 +134,7 @@ To perform cu/rscu over the AF domain regions:
 To use the slice function (an example slice.csv is provided to show how the file needs to look like):
 
 ```bash
-./coconut -cu -slice_domains  example.fasta slice.csv example.csv
+./coconut -cu -slice_domains slice.csv example.fasta example.csv
 ```
 Fetching all versions of a transcript using a gene symbol: 
 
@@ -149,16 +149,19 @@ To perform %MinMax calculations (no output name is required here):
 And if you want to use a different window of codons:
 
 ```bash
-./coconut -minmax  Usage-num3.man 10 multi_cds.fasta
+./coconut -minmax Usage-num3.man multi_cds.fasta 10
 ```
 
 If you want to perform the RRT over the sequence:
 
 ```bash
-./coconut -rtt -minmax Usage-num3.man ENST00000372979
+./coconut -rrt -minmax Usage-num3.man ENST00000372979
 ```
+Or in a transcript that is fetched:
 
-
+```bash
+./coconut -rrt -fetch ENST00000372979 -minmax Usage-num3.man ENST00000372979.csv
+```
 To perform a minmax calculation with a fetch: both "a" and "*.fasta" work as placeholders for parsing the arguments, this will be fixed soon:
 
 ```bash
