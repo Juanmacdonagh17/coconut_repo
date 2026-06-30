@@ -99,6 +99,15 @@ Using the -help flag will provide a list of all available commands, but here is 
 
 Aditional codon usage tables can be found online, for example: https://www.kazusa.or.jp/codon/ 
 
+### minmax table generation:
+
+If extra minmax table are needed, we provide a script to make them, using CDS from an organism as an input:
+
+```bash
+./minmax_table_generator < org_all_cds.fasta > org_mm_table
+```
+
+Different genomes / CDS can be retrived from: https://ftp.ncbi.nlm.nih.gov/genomes/all
 ---
 ### Examples
 
