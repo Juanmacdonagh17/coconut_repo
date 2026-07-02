@@ -200,7 +200,6 @@ To perform a minmax calculation with a fetch: "*.csv" work as placeholders for p
 | **Descriptive codon metrics** | | | | | | |
 | Codon usage (CU) / RSCU | ✅ | ✅ | ✅ | ◑² | x | x |
 | CAI | ✅ | ✅ | ✅ | x | ◑³ | ✅ |
-| ENC (effective number of codons) | ✅ | ✅ | ✅ | x | x | x |
 | %MinMax positional profile | ✅ | x | x | ✅ | x | x |
 | Statistical null for %MinMax (RRT) | ✅ | x | x | ✅ | x | x |
 | **Structure–sequence integration (core)** | | | | | | |
