@@ -29,7 +29,7 @@
 #define API_URL_FORMAT_MULT "https://rest.ensembl.org/sequence/id/%s?type=cds;content-type=text/x-fasta;multiple_sequences=1" // dynamic ID URL
 #define MAX_CAI_ENTRIES 100 // maybe 100 is a lot 
 // there are some values down the pipeline that should be added here, the the af and uniprot fetches
-
+#define HARMONIZE_MAX_SWEEP 100 // new minmax comparator tool!
 
 
 /////////////////////////
@@ -314,7 +314,8 @@ char* fetchEnsemblGeneFromUniProt(const char *uniprot_id) {
 
     curl_global_init(CURL_GLOBAL_ALL);
     curl_handle = curl_easy_init();
-    if (!curl_handle) return NULL;
+    //if (!curl_handle) { free(chunk.memory); return NULL; } 
+    if (!curl_handle) return NULL; //free(chunk.memory); return NULL;
 
     curl_easy_setopt(curl_handle, CURLOPT_URL, url);
     curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
@@ -1464,6 +1465,7 @@ float* computeMinMaxProfile(const char *sequence, int window_size, int *profileL
     int numCodons = len / 3;
     int nWindows = numCodons - window_size + 1;
     *profileLength = nWindows;
+    if (nWindows < 1) { *profileLength = 0; return NULL; } 
     float *profile = malloc(nWindows * sizeof(float));
     if (!profile) return NULL;
     for (int j = 0; j < nWindows; j++) {
@@ -1512,6 +1514,7 @@ float* computeRRTMinMaxProfile(const char *sequence, int window_size, int iterat
     int numCodons = len / 3;
     int nWindows = numCodons - window_size + 1;
     *profileLength = nWindows;
+    if (nWindows < 1) { *profileLength = 0; return NULL; } 
     float *accumulatedProfile = calloc(nWindows, sizeof(float));
     if (!accumulatedProfile) return NULL;
     for (int iter = 0; iter < iterations; iter++) {
@@ -1914,7 +1917,7 @@ void processSequence(const char *sequence_data, const char *sequence_id, FILE *o
                      bool calculate_cu, bool calculate_rscu, bool calculate_minmax, 
                      int window_size, const char *output_filename, const char *minmax_output_filename,
                      bool silent, bool slice_sequence, const char *slice_filename, 
-                     bool calculate_cai,  const char *cai_reference_filename, Codon_Ref_CAI *cai_table, int n_cai_table,
+                     bool calculate_cai,  const char *cai_reference_filename, Codon_Ref_CAI *cai_table, int n_cai_table, //
                      bool calculate_rtt) {
 
     // initialize sequence structure
@@ -2094,6 +2097,466 @@ int mergeSideBySide(const char *file1, const char *file2, const char *file3, con
     return 0;
 }
 
+
+/* ===================== -harmonize feature ===================== */
+/* org2 codon-usage table; org1 reuses the existing global codon_usage_stats */
+CodonUsageStats codon_usage_stats_org2[4][4][4];
+
+/* same parsing as readCodonUsageData, into a provided table */
+void readCodonUsageDataInto(const char *filename, CodonUsageStats T[4][4][4]) {
+    memset(T, 0, sizeof(CodonUsageStats) * 4 * 4 * 4);
+    FILE *infile = fopen(filename, "r");
+    if (!infile) { fprintf(stderr, "Error opening codon usage file: %s\n", filename); exit(1); }
+    int i, j, k, amino_index; float usage, max, min, ave; char line[MAX_LINE_LENGTH];
+    while (fgets(line, sizeof(line), infile)) {
+        if (sscanf(line, "%d %d %d %f %f %f %f %d", &i, &j, &k, &usage, &max, &min, &ave, &amino_index) == 8) {
+            T[i][j][k].usage = usage; T[i][j][k].max = max; T[i][j][k].min = min;
+            T[i][j][k].ave = ave; T[i][j][k].amino_acid_index = amino_index;
+        }
+    }
+    fclose(infile);
+}
+
+static CodonUsageStats hz_statOf(CodonUsageStats T[4][4][4], int ci) {
+    int a, b, d; getCodonIndices(codons[ci], &a, &b, &d); return T[a][b][d];
+}
+
+static double hz_minmax(double su, double sx, double sn, double sa, int vc) {
+    if (vc == 0) return 0.0;
+    double m = su / vc, x = sx / vc, n = sn / vc, a = sa / vc, mm = 0.0;
+    if (m > a && (x - a) != 0) mm = (m - a) / (x - a) * 100.0;
+    else if (m < a && (a - n) != 0) mm = -(a - m) / (a - n) * 100.0;
+    return mm;
+}
+
+/* %MinMax profile of seq vs table T (coconut formula/windowing); fills prof[];
+   if out != NULL appends long-CSV rows tagged with 'variant' */
+int hz_profile(FILE *out, const char *variant, const char *id,
+               const char *seq, int W, CodonUsageStats T[4][4][4], float *prof) {
+    int len = (int)strlen(seq), nc = len / CODON_LENGTH, nW = nc - W + 1;
+    if (nW < 1) return 0;
+    for (int j = 0; j < nW; j++) {
+        double su = 0, sx = 0, sn = 0, sa = 0; int vc = 0;
+        for (int k = 0; k < W; k++) {
+            char c[CODON_LENGTH + 1];
+            strncpy(c, seq + (j + k) * CODON_LENGTH, CODON_LENGTH); c[CODON_LENGTH] = '\0';
+            if (strchr(c, 'N')) continue;
+            int a, b, d; getCodonIndices(c, &a, &b, &d);
+            CodonUsageStats s = T[a][b][d];
+            if (s.amino_acid_index < 1000) { su += s.usage; sx += s.max; sn += s.min; sa += s.ave; vc++; }
+        }
+        if (vc == 0) { prof[j] = 0.0f; continue; }
+        double mm = hz_minmax(su, sx, sn, sa, vc);
+        prof[j] = (float)mm;
+        if (out) {
+            char cs[CODON_LENGTH + 1];
+            strncpy(cs, seq + j * CODON_LENGTH, CODON_LENGTH); cs[CODON_LENGTH] = '\0';
+            char aa[2] = "X";
+            for (int ci = 0; ci < MAX_CODONS; ci++)
+                if (strcmp(codons[ci], cs) == 0) { aa[0] = amino_acids[ci]; break; }
+            fprintf(out, "%s,%s,%d,%s,%s,%.2f,%.2f,%.2f,%.2f,%.2f\n",
+                    variant, id, j + 1, cs, aa, su / vc, sx / vc, sn / vc, sa / vc, mm);
+        }
+    }
+    return nW;
+}
+
+static void hz_maxexpr(int *M, const int *nat, int N, CodonUsageStats T2[4][4][4]) {
+    for (int p = 0; p < N; p++) {
+        char a = amino_acids[nat[p]];
+        if (a == 'M' || a == 'W' || a == '*') { M[p] = nat[p]; continue; }
+        int best = nat[p]; double bu = -1.0;
+        for (int ci = 0; ci < MAX_CODONS; ci++)
+            if (amino_acids[ci] == a) { double u = hz_statOf(T2, ci).usage; if (u > bu) { bu = u; best = ci; } }
+        M[p] = best;
+    }
+}
+
+/* minimize sum_window (D_org2 - A_native)^2 by coordinate descent; init = native codons.
+   max/min/ave are aa-fixed under T2, so only the window usage-sum moves -> O(1) per move */
+static void hz_harmonize(int *H, const int *nat, int N, int W,
+                         CodonUsageStats T2[4][4][4], const float *A, int nW) {
+    for (int p = 0; p < N; p++) H[p] = nat[p];
+    double *SX = calloc(nW, sizeof(double)), *SN = calloc(nW, sizeof(double));
+    double *SA = calloc(nW, sizeof(double)), *SU = calloc(nW, sizeof(double));
+    int *VC = calloc(nW, sizeof(int)); double *Up = malloc(N * sizeof(double));
+    for (int j = 0; j < nW; j++)
+        for (int k = 0; k < W; k++) {
+            CodonUsageStats s = hz_statOf(T2, H[j + k]);
+            if (s.amino_acid_index < 1000) { SX[j] += s.max; SN[j] += s.min; SA[j] += s.ave; SU[j] += s.usage; VC[j]++; }
+        }
+    for (int p = 0; p < N; p++) Up[p] = hz_statOf(T2, H[p]).usage;
+    for (int sweep = 0; sweep < HARMONIZE_MAX_SWEEP; sweep++) {
+        int changed = 0;
+        for (int p = 0; p < N; p++) {
+            char a = amino_acids[nat[p]];
+            if (a == 'M' || a == 'W' || a == '*') continue;
+            int j0 = (p - W + 1 > 0) ? (p - W + 1) : 0;
+            int j1 = (p < nW - 1) ? p : (nW - 1);
+            int bestC = H[p]; double bestDelta = 0.0, bestU = Up[p];
+            for (int ci = 0; ci < MAX_CODONS; ci++) {
+                if (amino_acids[ci] != a || ci == H[p]) continue;
+                double newU = hz_statOf(T2, ci).usage, du = newU - Up[p], delta = 0.0;
+                for (int j = j0; j <= j1; j++) {
+                    double oldD = hz_minmax(SU[j], SX[j], SN[j], SA[j], VC[j]);
+                    double newD = hz_minmax(SU[j] + du, SX[j], SN[j], SA[j], VC[j]);
+                    double e0 = oldD - A[j], e1 = newD - A[j];
+                    delta += e1 * e1 - e0 * e0;
+                }
+                if (delta < bestDelta - 1e-7) { bestDelta = delta; bestC = ci; bestU = newU; }
+            }
+            if (bestC != H[p]) {
+                double du = bestU - Up[p];
+                for (int j = j0; j <= j1; j++) SU[j] += du;
+                Up[p] = bestU; H[p] = bestC; changed = 1;
+            }
+        }
+        if (!changed) break;
+    }
+    free(SX); free(SN); free(SA); free(SU); free(VC); free(Up);
+}
+
+static void hz_residual(const float *P, const float *A, int nW, double *rmse, double *maxabs) {
+    double ss = 0, mx = 0;
+    for (int j = 0; j < nW; j++) { double e = fabs((double)P[j] - A[j]); if (e > mx) mx = e; ss += e * e; }
+    *rmse = sqrt(ss / nW); *maxabs = mx;
+}
+
+/* Dynamic Time Warping distance between two %MinMax profiles (Sakoe & Chiba 1978),
+   same definition used by CodonTransformer (Fallahpour et al. 2025, Eq. 8):
+   classic DTW with Euclidean local cost, full window (no Sakoe-Chiba band).
+   raw_dtw is the cumulative-cost path distance; norm_dtw divides by path length
+   (number of warping steps) so sequences of different size remain comparable. */
+static void hz_dtw(const float *X, int nX, const float *Y, int nY, double *raw_dtw, double *norm_dtw) {
+    double *prev = malloc((nY + 1) * sizeof(double));
+    double *cur  = malloc((nY + 1) * sizeof(double));
+    int    *plen = malloc((nY + 1) * sizeof(int));
+    int    *clen = malloc((nY + 1) * sizeof(int));
+    for (int j = 0; j <= nY; j++) { prev[j] = (j == 0) ? 0.0 : 1e18; plen[j] = 0; }
+    for (int i = 1; i <= nX; i++) {
+        cur[0] = 1e18; clen[0] = 0;
+        for (int j = 1; j <= nY; j++) {
+            double cost = fabs((double)X[i - 1] - Y[j - 1]);
+            double best = prev[j - 1]; int blen = plen[j - 1];      /* diagonal */
+            if (prev[j] < best) { best = prev[j]; blen = plen[j]; }  /* insertion */
+            if (cur[j - 1] < best) { best = cur[j - 1]; blen = clen[j - 1]; } /* deletion */
+            cur[j] = cost + best; clen[j] = blen + 1;
+        }
+        double *t = prev; prev = cur; cur = t;
+        int *ti = plen; plen = clen; clen = ti;
+    }
+    *raw_dtw = prev[nY];
+    *norm_dtw = (plen[nY] > 0) ? prev[nY] / plen[nY] : 0.0;
+    free(prev); free(cur); free(plen); free(clen);
+}
+
+/* one CDS record: 4 profiles -> CSV, harmonized -> FASTA, residuals -> fit summary */
+static void hz_record(FILE *out, FILE *fa, FILE *fit, const char *id, const char *seq, int W) {
+    int N = (int)strlen(seq) / CODON_LENGTH, nW = N - W + 1;
+    if (nW < 1) { fprintf(stderr, "harmonize: skip %s (shorter than window)\n", id); return; }
+    int *nat = calloc(N, sizeof(int));
+    for (int p = 0; p < N; p++) {
+        char c[CODON_LENGTH + 1]; strncpy(c, seq + p * 3, 3); c[3] = '\0';
+        int idx = -1;
+        for (int ci = 0; ci < MAX_CODONS; ci++) if (strcmp(codons[ci], c) == 0) { idx = ci; break; }
+        if (idx < 0) { fprintf(stderr, "harmonize: skip %s (non-ACGT codon %s at %d)\n", id, c, p + 1); free(nat); return; }
+        nat[p] = idx;
+    }
+    float *pNat = malloc(nW * sizeof(float)), *p2 = malloc(nW * sizeof(float));
+    float *pMax = malloc(nW * sizeof(float)), *pHar = malloc(nW * sizeof(float));
+    hz_profile(out, "native", id, seq, W, codon_usage_stats, pNat);
+    hz_profile(out, "native_in_org2", id, seq, W, codon_usage_stats_org2, p2);
+    int *M = malloc(N * sizeof(int)); hz_maxexpr(M, nat, N, codon_usage_stats_org2);
+    char *ms = malloc(N * 3 + 1); for (int p = 0; p < N; p++) memcpy(ms + p * 3, codons[M[p]], 3); ms[N * 3] = '\0';
+    hz_profile(out, "maxexpr", id, ms, W, codon_usage_stats_org2, pMax);
+    int *H = malloc(N * sizeof(int)); hz_harmonize(H, nat, N, W, codon_usage_stats_org2, pNat, nW);
+    char *hs = malloc(N * 3 + 1); for (int p = 0; p < N; p++) memcpy(hs + p * 3, codons[H[p]], 3); hs[N * 3] = '\0';
+    hz_profile(out, "harmonized", id, hs, W, codon_usage_stats_org2, pHar);
+    fprintf(fa, ">%s_harmonized\n", id);
+    for (int i = 0; i < N * 3; i += 60) fprintf(fa, "%.*s\n", (N * 3 - i < 60) ? (N * 3 - i) : 60, hs + i);
+    double r, m, dtw_raw, dtw_norm;
+    hz_residual(p2,  pNat, nW, &r, &m); hz_dtw(p2,  nW, pNat, nW, &dtw_raw, &dtw_norm);
+    fprintf(fit, "%s,native_in_org2,%.3f,%.3f,%.3f,%.5f\n", id, r, m, dtw_raw, dtw_norm);
+    hz_residual(pMax, pNat, nW, &r, &m); hz_dtw(pMax, nW, pNat, nW, &dtw_raw, &dtw_norm);
+    fprintf(fit, "%s,maxexpr,%.3f,%.3f,%.3f,%.5f\n", id, r, m, dtw_raw, dtw_norm);
+    hz_residual(pHar, pNat, nW, &r, &m); hz_dtw(pHar, nW, pNat, nW, &dtw_raw, &dtw_norm);
+    fprintf(fit, "%s,harmonized,%.3f,%.3f,%.3f,%.5f\n", id, r, m, dtw_raw, dtw_norm);
+    free(nat); free(M); free(H); free(ms); free(hs); free(pNat); free(p2); free(pMax); free(pHar);
+}
+
+/* -harmonize entry: CDS fasta + org1 table + org2 table (+ window). Multi-FASTA aware. */
+void runHarmonize(const char *fastaPath, const char *table1, const char *table2, int W, const char *outCSV) {
+    readCodonUsageData(table1);                              /* org1 -> global codon_usage_stats */
+    readCodonUsageDataInto(table2, codon_usage_stats_org2); /* org2 */
+    FILE *out = fopen(outCSV, "w");
+    if (!out) { fprintf(stderr, "Error opening %s\n", outCSV); exit(1); }
+    fprintf(out, "variant,ID,residue,codon,aminoacid,usage,max,min,ave,minmax\n");
+    FILE *fa = fopen("harmonized_cds.fasta", "w");
+    FILE *fit = fopen("harmonize_fit_summary.csv", "w");
+    if (!fa || !fit) { fprintf(stderr, "Error opening harmonize output files\n"); exit(1); }
+    fprintf(fit, "ID,variant,RMSE_vs_native,max_abs_dev,DTW_raw,DTW_normalized\n");
+    FILE *in = fopen(fastaPath, "r");
+    if (!in) { fprintf(stderr, "Error opening FASTA: %s\n", fastaPath); exit(1); }
+    static char seq[MAX_SEQUENCE_LENGTH]; size_t L = 0; char id[256] = ""; int have = 0;
+    char line[MAX_LINE_LENGTH];
+    while (fgets(line, sizeof(line), in)) {
+        if (line[0] == '>') {
+            if (have) { seq[L] = '\0'; hz_record(out, fa, fit, id, seq, W); }
+            L = 0; id[0] = '\0'; sscanf(line + 1, "%255s", id); have = 1; continue;
+        }
+        if (!have) continue;
+        for (char *c = line; *c; c++) {
+            char u = *c; if (u >= 'a' && u <= 'z') u -= 32;
+            if (u == 'A' || u == 'C' || u == 'G' || u == 'T' || u == 'N') if (L < sizeof(seq) - 1) seq[L++] = u;
+        }
+    }
+    if (have) { seq[L] = '\0'; hz_record(out, fa, fit, id, seq, W); }
+    fclose(in); fclose(out); fclose(fa); fclose(fit);
+    fprintf(stdout, "Harmonize done -> %s, harmonized_cds.fasta, harmonize_fit_summary.csv\n", outCSV);
+}
+/* =================== end -harmonize feature =================== */
+
+char* fetchInterProJSON(const char *uniprot_id) {
+    char url[256];
+    snprintf(url, sizeof(url),
+             "https://www.ebi.ac.uk/interpro/api/protein/uniprot/%s/entry/interpro",
+             uniprot_id);
+    struct MemoryStruct chunk; chunk.memory = malloc(1); chunk.size = 0;
+    CURL *curl_handle = curl_easy_init();
+    if (!curl_handle) { fprintf(stderr, "Failed to init curl\n"); free(chunk.memory); return NULL; }
+    curl_global_init(CURL_GLOBAL_ALL);
+    curl_easy_setopt(curl_handle, CURLOPT_URL, url);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
+    curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "libcurl-agent/1.0");
+    CURLcode res = curl_easy_perform(curl_handle);
+    curl_easy_cleanup(curl_handle); curl_global_cleanup();
+    if (res != CURLE_OK) { fprintf(stderr, "curl failed: %s\n", curl_easy_strerror(res)); free(chunk.memory); return NULL; }
+    return chunk.memory;
+}
+ 
+static char* fetchInterProEntriesJSON(const char *uniprot_id) {
+    char url[256];
+    snprintf(url, sizeof(url),
+             "https://www.ebi.ac.uk/interpro/api/entry/interpro/protein/uniprot/%s/",
+             uniprot_id);
+    struct MemoryStruct chunk; chunk.memory = malloc(1); chunk.size = 0;
+    CURL *curl_handle = curl_easy_init();
+    if (!curl_handle) { free(chunk.memory); return NULL; }
+    curl_global_init(CURL_GLOBAL_ALL);
+    curl_easy_setopt(curl_handle, CURLOPT_URL, url);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEFUNCTION, WriteMemoryCallback);
+    curl_easy_setopt(curl_handle, CURLOPT_WRITEDATA, (void *)&chunk);
+    curl_easy_setopt(curl_handle, CURLOPT_USERAGENT, "libcurl-agent/1.0");
+    CURLcode res = curl_easy_perform(curl_handle);
+    curl_easy_cleanup(curl_handle); curl_global_cleanup();
+    if (res != CURLE_OK) { free(chunk.memory); return NULL; }
+    return chunk.memory;
+}
+ 
+typedef struct { int start, end; char label[64]; int annotated; } IPRegion;
+ 
+static int ipr_json_str(const char *buf, const char *key, char *out, size_t n) {
+    char pat[64]; snprintf(pat, sizeof pat, "\"%s\"", key);
+    const char *p = strstr(buf, pat); if (!p) return 0;
+    p = strchr(p + strlen(pat), ':'); if (!p) return 0;
+    p = strchr(p, '"'); if (!p) return 0; p++;
+    size_t i = 0; while (*p && *p != '"' && i < n - 1) out[i++] = *p++;
+    out[i] = '\0'; return 1;
+}
+static int ipr_json_int_at(const char *p, const char *key, int *val) {
+    char pat[64]; snprintf(pat, sizeof pat, "\"%s\"", key);
+    const char *q = strstr(p, pat); if (!q) return 0;
+    q = strchr(q + strlen(pat), ':'); if (!q) return 0; q++;
+    while (*q == ' ') q++;
+    *val = atoi(q); return 1;
+}
+static int ipr_cmp(const void *a, const void *b) {
+    const IPRegion *x = a, *y = b;
+    return (x->start != y->start) ? x->start - y->start : x->end - y->end;
+}
+ 
+/* copy a brace-delimited JSON object starting at p into a new buffer; returns it (caller frees) */
+static char* ipr_extract_obj(const char *p, size_t *out_len) {
+    if (*p != '{') return NULL;
+    int depth = 0; const char *c = p;
+    do { if (*c == '{') depth++; else if (*c == '}') depth--; c++; } while (*c && depth > 0);
+    size_t len = (size_t)(c - p);
+    char *obj = malloc(len + 1); if (!obj) return NULL;
+    memcpy(obj, p, len); obj[len] = '\0';
+    if (out_len) *out_len = len;
+    return obj;
+}
+ 
+static void ipr_translate(const char *nt, char *aa_out, int max) {
+    int n = (int)strlen(nt) / 3, k = 0;
+    for (int c = 0; c < n && k < max - 1; c++) {
+        char cod[4]; strncpy(cod, nt + c * 3, 3); cod[3] = '\0';
+        char aa = 'X';
+        for (int ci = 0; ci < MAX_CODONS; ci++)
+            if (strcmp(codons[ci], cod) == 0) { aa = amino_acids[ci]; break; }
+        aa_out[k++] = aa;
+    }
+    aa_out[k] = '\0';
+}
+ 
+static char* ipr_extract_nt(const char *fasta) {
+    const char *p = strchr(fasta, '\n'); if (!p) return NULL;
+    char *nt = malloc(strlen(p) + 1); if (!nt) return NULL;
+    size_t k = 0;
+    for (; *p; p++) {
+        if (*p == '>') break;
+        char u = *p; if (u >= 'a' && u <= 'z') u -= 32;
+        if (u == 'A' || u == 'C' || u == 'G' || u == 'T' || u == 'N') nt[k++] = u;
+    }
+    nt[k] = '\0'; return nt;
+}
+ 
+static int ipr_gate(const char *seqID, const char *ipseq) {
+    char *fasta = fetchProteinSequence(seqID, false);
+    if (!fasta) { fprintf(stderr, "interpro: could not fetch CDS for gate (%s)\n", seqID); return 0; }
+    char *nt = ipr_extract_nt(fasta); free(fasta);
+    if (!nt) return 0;
+    char *trans = malloc(strlen(nt) / 3 + 2);
+    if (!trans) { free(nt); return 0; }
+    ipr_translate(nt, trans, (int)(strlen(nt) / 3 + 2)); free(nt);
+    size_t tl = strlen(trans);
+    if (tl && trans[tl - 1] == '*') trans[--tl] = '\0';
+    int ok = (strcmp(trans, ipseq) == 0);
+    if (!ok)
+        fprintf(stderr,
+            "interpro: WARNING - CDS translation (%zu aa) does not match UniProt/InterPro "
+            "sequence (%zu aa) for %s. Likely isoform/version mismatch; "
+            "domain coordinates may be misaligned.\n", tl, strlen(ipseq), seqID);
+    free(trans);
+    return ok;
+}
+ 
+/* Parse the real InterPro results[] JSON structure:
+   results[i].metadata.accession / .type
+   results[i].proteins[j].entry_protein_locations[k].fragments[l].start / .end */
+static int ipr_parse_results(const char *json, IPRegion *reg, int *nreg_out,
+                              int *protlen_out) {
+    int nreg = 0, protlen = 0;
+    const char *results = strstr(json, "\"results\""); if (!results) return 0;
+    /* iterate top-level result objects (each starts with '{' after the array '[') */
+    const char *p = strchr(results, '['); if (!p) return 0; p++;
+    while (*p && nreg < 700) {
+        while (*p && *p != '{' && *p != ']') p++;
+        if (*p == ']' || !*p) break;
+        /* extract full result object */
+        size_t obj_len = 0;
+        char *result_obj = ipr_extract_obj(p, &obj_len);
+        if (!result_obj) break;
+        /* accession and type from "metadata" sub-object */
+        char acc[48] = "", type[32] = "";
+        const char *meta = strstr(result_obj, "\"metadata\"");
+        if (meta) {
+            const char *mb = strchr(meta, '{');
+            if (mb) {
+                size_t ml = 0; char *meta_obj = ipr_extract_obj(mb, &ml);
+                if (meta_obj) {
+                    ipr_json_str(meta_obj, "accession", acc, sizeof acc);
+                    ipr_json_str(meta_obj, "type", type, sizeof type);
+                    free(meta_obj);
+                }
+            }
+        }
+        if (!acc[0]) { free(result_obj); p += obj_len; continue; }
+        /* protein_length (grab once) */
+        if (!protlen) ipr_json_int_at(result_obj, "protein_length", &protlen);
+        /* fragments: iterate all entry_protein_locations in proteins[] */
+        const char *fp = result_obj;
+        while ((fp = strstr(fp, "\"fragments\"")) != NULL) {
+            const char *fa = strchr(fp, '['); if (!fa) break;
+            fa++;
+            while (*fa) {
+                while (*fa && *fa != '{' && *fa != ']') fa++;
+                if (*fa == ']' || !*fa) break;
+                size_t fl = 0; char *frag = ipr_extract_obj(fa, &fl);
+                if (!frag) break;
+                int s = 0, e = 0;
+                ipr_json_int_at(frag, "start", &s);
+                ipr_json_int_at(frag, "end",   &e);
+                free(frag);
+                if (s > 0 && e >= s && e <= (protlen ? protlen : 999999) && nreg < 700) {
+                    reg[nreg].start = s; reg[nreg].end = e; reg[nreg].annotated = 1;
+                    snprintf(reg[nreg].label, sizeof reg[nreg].label,
+                             "%s_%s", type[0] ? type : "domain", acc);
+                    nreg++;
+                }
+                fa += fl;
+            }
+            fp++;
+        }
+        free(result_obj); p += obj_len;
+    }
+    *nreg_out  = nreg;
+    *protlen_out = protlen;
+    return (nreg > 0 || protlen > 0);
+}
+ 
+int runInterProRegions(const char *uniprot_id, const char *seqID, const char *out_csv) {
+    /* step 1: metadata fetch -> protein sequence for gate */
+    char *meta_json = fetchInterProJSON(uniprot_id);
+    if (!meta_json) return 0;
+    int protlen_meta = 0; ipr_json_int_at(meta_json, "length", &protlen_meta);
+    char *ipseq = malloc((size_t)(protlen_meta > 0 ? protlen_meta : 4096) + 64);
+    if (!ipseq) { free(meta_json); return 0; }
+    int have_seq = ipr_json_str(meta_json, "sequence", ipseq,
+                                (size_t)(protlen_meta > 0 ? protlen_meta : 4096) + 64);
+    free(meta_json);
+    if (!have_seq) {
+        fprintf(stderr, "interpro: no sequence in metadata response for %s\n", uniprot_id);
+        free(ipseq); return 0;
+    }
+ 
+    int gate_ok = ipr_gate(seqID, ipseq);
+    free(ipseq);
+    if (!gate_ok) return 0;
+ 
+    /* step 2: entries fetch -> results[] with domain coordinates */
+    char *entries_json = fetchInterProEntriesJSON(uniprot_id);
+    if (!entries_json) { fprintf(stderr, "interpro: could not fetch entries for %s\n", uniprot_id); return 0; }
+ 
+    IPRegion *reg = malloc(sizeof(IPRegion) * 1024);
+    if (!reg) { free(entries_json); return 0; }
+    int nreg = 0, protlen = 0;
+    ipr_parse_results(entries_json, reg, &nreg, &protlen);
+    free(entries_json);
+ 
+    if (protlen <= 0 && protlen_meta > 0) protlen = protlen_meta;
+    if (protlen <= 0) { fprintf(stderr, "interpro: unknown protein length for %s\n", uniprot_id); free(reg); return 0; }
+ 
+    /* sort + complement -> unannotated linker/tail regions */
+    qsort(reg, nreg, sizeof(IPRegion), ipr_cmp);
+    int nann = nreg, cursor = 1, un = 0;
+    for (int i = 0; i < nann; i++) {
+        if (reg[i].start > cursor) {
+            reg[nreg].start = cursor; reg[nreg].end = reg[i].start - 1; reg[nreg].annotated = 0;
+            snprintf(reg[nreg].label, sizeof reg[nreg].label, "unannotated_%d", ++un); nreg++;
+        }
+        if (reg[i].end + 1 > cursor) cursor = reg[i].end + 1;
+    }
+    if (cursor <= protlen) {
+        reg[nreg].start = cursor; reg[nreg].end = protlen; reg[nreg].annotated = 0;
+        snprintf(reg[nreg].label, sizeof reg[nreg].label, "unannotated_%d", ++un); nreg++;
+    }
+    qsort(reg, nreg, sizeof(IPRegion), ipr_cmp);
+ 
+    /* write slice-instructions: seqID,label,start:end (residue = codon index) */
+    FILE *fp = fopen(out_csv, "w");
+    if (!fp) { fprintf(stderr, "interpro: cannot open %s\n", out_csv); free(reg); return 0; }
+    for (int i = 0; i < nreg; i++)
+        fprintf(fp, "%s,%s,%d:%d\n", seqID, reg[i].label, reg[i].start, reg[i].end);
+    fclose(fp);
+ 
+    fprintf(stdout, "interpro: %d annotated + %d unannotated regions -> %s\n",
+            nann, nreg - nann, out_csv);
+    free(reg);
+    return 1;
+}
+
 // ping to see if ensemble is up. is could do the same for af and up, but i don't think it's necessary
 
 // bool isEnsemblServerOnline() {
@@ -2147,7 +2610,12 @@ int main(int argc, char *argv[]) {
     bool fetch_alphafold = false;   // fetch pLDDT from AlphaFold
     bool calculate_cai = false;    // calculate CAI
     bool slice_alphafold = false; // slice af regions to a file 
+    bool fetch_interpro = false;   // fetch InterPro domain regions
     bool calculate_rtt = false;  // calculate random reverse translations
+
+    bool do_harmonize = false; // harmonize a sequence to a different codon usage table
+
+    const char *harmonize_table1 = NULL, *harmonize_table2 = NULL, *harmonize_fasta = NULL; // for harmonize feature
 
     int window_size = 18;      // default window size for minmax
     // int slice_count = 0;      // number of slice instructions starts at 0
@@ -2264,6 +2732,10 @@ int main(int argc, char *argv[]) {
             fetch_alphafold = true;
             slice_alphafold = true;
 
+        } else if (strcmp(argv[i], "-interpro") == 0) {
+
+            fetch_interpro = true;
+
         } else if (strcmp(argv[i], "-slice_domains") == 0) {
             if (i + 1 < argc) {
                 slice_sequence = true;
@@ -2278,6 +2750,18 @@ int main(int argc, char *argv[]) {
                 // the input fasta (local mode) and optional window are read as positionals below
             } else {
                 fprintf(stderr, "Error: a codon usage table must be specified with -minmax flag.\n");
+                return 1;
+            }
+
+        } else if (strcmp(argv[i], "-harmonize") == 0) {
+            if (i + 3 < argc) {
+                do_harmonize = true;
+                harmonize_table1 = argv[++i];   // org1 codon usage table
+                harmonize_table2 = argv[++i];   // org2 codon usage table
+                harmonize_fasta  = argv[++i];   // CDS fasta (organism 1 native)
+                if (i + 1 < argc && isdigit((unsigned char)argv[i + 1][0])) window_size = atoi(argv[++i]);
+            } else {
+                fprintf(stderr, "Error: -harmonize needs <table_org1> <table_org2> <cds.fasta> [window].\n");
                 return 1;
             }
 
@@ -2342,6 +2826,10 @@ int main(int argc, char *argv[]) {
     // errors for arguments or files missing //
     ///////////////////////////////////////////
 
+    if (do_harmonize) {
+        runHarmonize(harmonize_fasta, harmonize_table1, harmonize_table2, window_size, "harmonize_out.csv");
+        return 0;
+    }
 
     // if you are NOT fetch but you are using a fasta, you need an input file name! 
     if ((!input_filename) && (!fetch_sequence && !fetch_from_file && !fetch_gene && !fetch_uniprot)) {
@@ -2371,6 +2859,11 @@ int main(int argc, char *argv[]) {
         "         |  |\n"
         "         m  m\n");
          
+        return 1;
+    }
+
+    if (fetch_interpro && !fetch_uniprot) {
+        fprintf(stderr, "Error: -interpro can only be used if -uniprot is also specified.\n");
         return 1;
     }
 
@@ -2551,6 +3044,14 @@ int main(int argc, char *argv[]) {
 
 
         fetch_sequence = true;
+        if (fetch_interpro) {
+            char interpro_csv_name[512];
+            snprintf(interpro_csv_name, sizeof(interpro_csv_name), "%s_regions_interpro.csv", uniprot_id);
+            if (runInterProRegions(uniprot_id, ensgID, interpro_csv_name)) {
+                slice_sequence = true;
+                slice_filename = strdup(interpro_csv_name);
+            }
+        }
         //fetch_multi    = true; // skip this, as if you want 1 uniprot you don't want multiple versions of the transcript
         protein_id     = ensgID; // ensgID, but actually it's the enstID :P
 
