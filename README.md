@@ -178,35 +178,63 @@ To perform a minmax calculation with a fetch: "*.csv" work as placeholders for p
 ./coconut -uniprot Q4KMZ1 Q4KMZ1.csv -af -rrt -minmax codon_table_minmax_hsapiens
 ```
 
----
-
-### Progress: 
-
-| Feature                                     | Available |
-|---------------------------------------------|-----------|
-| Read FASTA                                  | ✅        |
-| Read multi-FASTA                            | ✅        |
-| Calculate CU                                | ✅        |
-| Calculate RSCU                              | ✅        |
-| Fetch ENST from Ensembl                     | ✅        |
-| Fetch multiple ENSTs from list (Ensembl)    | ✅        |
-| Slice domains from FASTA/multi-FASTA        | ✅        |
-| Calculate MinMax                            | ✅        |
-| Docker image                                | ✅        |
-| Fetch multiple versions of a transcript     | ✅        |
-| Fetch using gene and species symbol         | ✅        |
-| Slice domains from fetch                    | ✅        |
-| Slice multiple versions from fetch          | ✅        |
-| UniProt as entry point for request          | ✅        |
-| AFDB integration for structural data        | ✅        |
-| AF structure classification                 | ✅        |
-| Calculate Codon Adaptation Index            | ✅        |
-| Perform RRT over the %MinMax                | ✅        |
-| Perform CU/RSCU over AF domain classifiation| ✅        |
-| Calculate CAI                               | ✅        |
-| Calculate NFD                               | ✅        |
-| Fetch domains from InterPro or CATH         | ❔        |
                                                       
+---
+# Coconut vs. existing codon-usage / codon-design tools
+
+**Legend:** ✅ full · ◑ partial / limited · x no · ⏳ planned
+
+> **Positioning.** Coconut is *not* the first tool to compute %MinMax, a %MinMax null model,
+> or codon harmonization — codons.org (Rodriguez *et al.* 2018; Wright *et al.* 2021) and
+> DnaChisel already do these. Coconut's differentiator is being a **single, dependency-free
+> pipeline that goes from an accession ID to a codon-usage profile mapped directly onto
+> protein structure and domain architecture** (AlphaFold pLDDT, InterPro), at genome scale.
+
+| Capability | Coconut | CodonW | coRdon | %MinMax (codons.org) | Codon Harmonizer | DnaChisel |
+|---|:--:|:--:|:--:|:--:|:--:|:--:|
+| **Input & data access** | | | | | | |
+| FASTA / multi-FASTA input | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Fetch CDS by Ensembl/UniProt ID | ✅ | x | x | x | x | x |
+| Fetch AlphaFold structure | ✅ | x | x | x | x | x |
+| Fetch InterPro domains | ✅ | x | x | x | x | x |
+| **Descriptive codon metrics** | | | | | | |
+| Codon usage (CU) / RSCU | ✅ | ✅ | ✅ | ◑² | x | x |
+| CAI | ✅ | ✅ | ✅ | x | ◑³ | ✅ |
+| ENC (effective number of codons) | ✅ | ✅ | ✅ | x | x | x |
+| %MinMax positional profile | ✅ | x | x | ✅ | x | x |
+| Statistical null for %MinMax (RRT) | ✅ | x | x | ✅ | x | x |
+| NFD | ✅ | x | x | x | x | x |
+| **Structure–sequence integration (core)** | | | | | | |
+| Map %MinMax ↔ pLDDT | ✅ | x | x | x | x | x |
+| Per-domain %MinMax (InterPro) | ✅ | x | x | x | x | x |
+| Per-region (domain vs. linker/tail) analysis | ✅ | x | x | x | x | x |
+| **Sequence design / harmonization** | | | | | | |
+| Codon harmonization (multi-variant) | ✅ | x | x | ✅⁴ | ✅ | ✅ |
+| DTW fit metric for harmonization | ✅ | x | x | x | x | x |
+| **Implementation** | | | | | | |
+| Language | C | C | R | Python/web | Python/web/Galaxy | Python |
+| Single self-contained binary, no runtime deps | ✅ | ✅ | x | x | x | x |
+| Genome-scale batch on the CLI | ✅ | ✅ | ◑ | x⁵ | ◑ | ◑ |
+
+### Notes
+
+1. CodonW reads local FASTA only; it does not query Ensembl/UniProt.
+2. codons.org works from codon frequencies but is not a general CU/RSCU reporter.
+3. Codon Harmonizer uses Relative Codon Adaptiveness (RCA), not CAI proper.
+4. Provided by CHARMING on the same codons.org platform.
+5. Web portal / per-sequence submission, not designed for local genome-scale batch.
+
+Tools of the "classic indices" family not shown as separate columns — DAMBE, CodonU (Python),
+Cubar (R), vhcub (R), CUBAP (web), GenRCA — share CodonW/coRdon's scope and none perform the
+structure/domain integration.
+
+### Key references
+
+- Rodriguez, Wright, Emrich, Clark (2018). *%MinMax…* Protein Science. https://doi.org/10.1002/pro.3336
+- Wright, Rodriguez, Li, Milenkovic, Emrich, Clark (2021). *CHARMING…* Protein Science. https://doi.org/10.1002/pro.4223
+- Claassens *et al.* (2017). *Codon Harmonizer.* PLoS ONE. http://codonharmonizer.systemsbiology.nl/
+- DnaChisel — Edinburgh Genome Foundry (constraint-based codon optimization).
+- Pellizza, Smal, Rodrigo, Arán (2018). *Codon usage clusters correlation…* Sci Rep. https://doi.org/10.1038/s41598-018-29035-z
 ---
 ### References: 
 
