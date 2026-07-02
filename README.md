@@ -203,11 +203,11 @@ To perform a minmax calculation with a fetch: "*.csv" work as placeholders for p
 | ENC (effective number of codons) | ✅ | ✅ | ✅ | x | x | x |
 | %MinMax positional profile | ✅ | x | x | ✅ | x | x |
 | Statistical null for %MinMax (RRT) | ✅ | x | x | ✅ | x | x |
-| NFD | ✅ | x | x | x | x | x |
 | **Structure–sequence integration (core)** | | | | | | |
 | Map %MinMax ↔ pLDDT | ✅ | x | x | x | x | x |
-| Per-domain %MinMax (InterPro) | ✅ | x | x | x | x | x |
-| Per-region (domain vs. linker/tail) analysis | ✅ | x | x | x | x | x |
+| NFD | ✅ | x | x | x | x | x |
+| AF2 domain detection | ✅ | x | x | x | x | x |
+| Per-domain %MinMax (InterPro / AF2) | ✅ | x | x | x | x | x |
 | **Sequence design / harmonization** | | | | | | |
 | Codon harmonization (multi-variant) | ✅ | x | x | ✅⁴ | ✅ | ✅ |
 | DTW fit metric for harmonization | ✅ | x | x | x | x | x |
