@@ -1618,9 +1618,9 @@ float computeCAI(const char *sequence, Codon_Ref_CAI *table, int nTable) {
         // for (int k = 0; k < 3; k++) {
         //     if (codon[k] == 'T') codon[k] = 'U';
         // }
-        // Skip AUG and UGG, since their RSCU is fixed at 1.0 (they do not contribute)
-        if (strcmp(codon, "ATG") == 0 || strcmp(codon, "TGG") == 0){ //||
-           // strcmp(codon, "TAA") == 0 || strcmp(codon, "TAG") == 0 || strcmp(codon, "TGA") == 0) {
+        // Skip AUG and UGG, since their RSCU is fixed at 1.0 (they do not contribute) and the stops!
+        if (strcmp(codon, "ATG") == 0 || strcmp(codon, "TGG") == 0) ||
+            strcmp(codon, "TAA") == 0 || strcmp(codon, "TAG") == 0 || strcmp(codon, "TGA") == 0) {
             continue;
         }
         
