@@ -178,9 +178,21 @@ To perform a minmax calculation with a fetch: "*.csv" work as placeholders for p
 ./coconut -uniprot Q4KMZ1 Q4KMZ1.csv -af -rrt -minmax codon_table_minmax_hsapiens
 ```
 
-                                                      
 ---
-# Coconut vs. existing codon-usage / codon-design tools
+### Validation
+ 
+Coconut's core metrics are benchmarked against established, independent tools to
+confirm the numbers are correct. The [`validation/`](validation/) folder contains
+two notebooks that reproduce the checks on an example human transcript (HBB):
+ 
+- **`benchmark.Rmd`** — Codon Usage, RSCU and CAI vs. [seqinr](https://cran.r-project.org/package=seqinr) (R).
+- **`benchmark_mm.ipynb`** — %MinMax vs. [CodonTransformer](https://github.com/adibvafa/CodonTransformer).
+On the example gene, CU/RSCU/CAI and %MinMax reproduce the reference
+implementations to rounding. See [`validation/README.md`](validation/README.md)
+for details and how to run them.
+                                                       
+---
+### Coconut vs. existing codon-usage / codon-design tools
 
 **Legend:** ✅ full · ◑ partial / limited · x no · ⏳ planned
 
