@@ -8,8 +8,8 @@ output: html_document
 
 library(seqinr)
 
-table <- "examples/hs_cai"
-fasta <- "examples/example.fasta"
+table <- "../examples/hs_cai"
+fasta <- "../examples/example.fasta"
 ```
 
 
@@ -42,12 +42,12 @@ write.csv(res, "codon_metrics.csv", row.names = FALSE)
 cat("OK ->", nrow(res), "codon_metrics_R.csv\n")
 ```
 ```{bash}
-./coconut -all examples/example.fasta codon_metrics_coconut.csv
+./coconut -all ../examples/example.fasta codon_metrics_coconut.csv
 ```
 
 
 ```{bash}
-./coconut -cai examples/hs_cai codon_metrics_coconut_cai.csv examples/example.fasta
+./coconut -cai ../examples/hs_cai codon_metrics_coconut_cai.csv ../examples/example.fasta
 
 ```
 
