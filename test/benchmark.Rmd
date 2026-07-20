@@ -1,0 +1,87 @@
+---
+title: "benchmark"
+output: html_document
+---
+
+```{r}
+# Codon usage: CU, RSCU, CAI w/ seqinr
+
+library(seqinr)
+
+table <- "examples/hs_cai"
+fasta <- "examples/example.fasta"
+```
+
+
+```{r}
+# Kazusa/hs_cai  (CODON per1000(count))
+ln <- readLines(table)
+tk <- unlist(regmatches(ln, gregexpr("[ACGT]{3}\\s+[0-9.]+\\([0-9]+\\)", ln)))
+n  <- as.numeric(sub(".*\\(([0-9]+)\\).*", "\\1", tk)); names(n) <- tolower(substr(tk, 1, 3))
+aa0 <- sapply(names(n), function(c) translate(s2c(c)))
+w  <- n; for (x in unique(aa0)) { i <- aa0 == x; w[i] <- n[i] / max(n[i]) }
+
+fa <- read.fasta(fasta)
+res <- do.call(rbind, lapply(names(fa), function(id) {
+  s    <- fa[[id]]
+  eff  <- uco(s, index = "eff")
+  rscu <- uco(s, index = "rscu")
+  aa   <- sapply(names(eff), function(c) translate(s2c(c)))
+  data.frame(seq = id, codon = toupper(names(eff)), count = as.integer(eff),
+             CU   = round(as.numeric(eff / tapply(eff, aa, sum)[aa]), 4),
+             RSCU = round(as.numeric(rscu), 4),
+             CAI  = round(cai(s, w = w[names(eff)]), 4))
+}))
+
+res
+```
+
+
+```{r}
+write.csv(res, "codon_metrics.csv", row.names = FALSE)
+cat("OK ->", nrow(res), "codon_metrics_R.csv\n")
+```
+```{bash}
+./coconut -all examples/example.fasta codon_metrics_coconut.csv
+```
+
+
+```{bash}
+./coconut -cai examples/hs_cai codon_metrics_coconut_cai.csv examples/example.fasta
+
+```
+
+```{r}
+# R seqinr vs Coconut (-all y -cai)
+
+r   <- read.csv("codon_metrics.csv", stringsAsFactors = FALSE)
+cc  <- read.csv("codon_metrics_coconut.csv", check.names = FALSE, stringsAsFactors = FALSE)
+cai <- read.csv("codon_metrics_coconut_cai.csv", stringsAsFactors = FALSE)
+```
+
+
+```{r}
+
+
+codons <- sub("_CU$", "", grep("_CU$", names(cc), value = TRUE))
+cc_long <- data.frame(
+  codon   = codons,
+  CU_cc   = as.numeric(cc[1, paste0(codons, "_CU")]),
+  RSCU_cc = as.numeric(cc[1, paste0(codons, "_RSCU")]),
+  stringsAsFactors = FALSE)
+
+m <- merge(r, cc_long, by = "codon")
+m$dCU   <- abs(m$CU   - m$CU_cc)
+m$dRSCU <- abs(m$RSCU - m$RSCU_cc)
+
+na_codons <- m$codon[is.na(m$dRSCU)]   # NA vs 0
+
+cat(sprintf("CU   : max|Δ| = %.4f\n", max(m$dCU,   na.rm = TRUE)))
+cat(sprintf("RSCU : max|Δ| = %.4f\n", max(m$dRSCU, na.rm = TRUE)))
+cat(sprintf("CAI  : R = %.4f | Coconut = %.4f | Δ = %.4f\n",
+            r$CAI[1], cai$CAI[1], abs(r$CAI[1] - cai$CAI[1])))
+
+cat("\nWorst 5 / RSCU:\n")
+print(head(m[order(-m$dRSCU), c("codon","CU","CU_cc","RSCU","RSCU_cc","dRSCU")], 5),
+      row.names = FALSE)
+```
