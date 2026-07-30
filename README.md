@@ -180,17 +180,18 @@ To perform a minmax calculation with a fetch: "*.csv" work as placeholders for p
 
 ---
 ### Validation
- 
+
 Coconut's core metrics are benchmarked against established, independent tools to
 confirm the numbers are correct. The [`validation/`](validation/) folder contains
 two notebooks that reproduce the checks on an example human transcript (HBB):
- 
+
 - **`benchmark.Rmd`** — Codon Usage, RSCU and CAI vs. [seqinr](https://cran.r-project.org/package=seqinr) (R).
 - **`benchmark_mm.ipynb`** — %MinMax vs. [CodonTransformer](https://github.com/adibvafa/CodonTransformer).
+
 On the example gene, CU/RSCU/CAI and %MinMax reproduce the reference
 implementations to rounding. See [`validation/README.md`](validation/README.md)
 for details and how to run them.
-                                                       
+
 ---
 ### Coconut vs. existing codon-usage / codon-design tools
 
@@ -239,29 +240,16 @@ Tools of the "classic indices" family not shown as separate columns — DAMBE, C
 Cubar (R), vhcub (R), CUBAP (web), GenRCA — share CodonW/coRdon's scope and none perform the
 structure/domain integration.
 
-### Key references
-
-- Rodriguez, Wright, Emrich, Clark (2018). *%MinMax…* Protein Science. https://doi.org/10.1002/pro.3336
-- Wright, Rodriguez, Li, Milenkovic, Emrich, Clark (2021). *CHARMING…* Protein Science. https://doi.org/10.1002/pro.4223
-- Claassens *et al.* (2017). *Codon Harmonizer.* PLoS ONE. http://codonharmonizer.systemsbiology.nl/
-- DnaChisel — Edinburgh Genome Foundry (constraint-based codon optimization).
-- Pellizza, Smal, Rodrigo, Arán (2018). *Codon usage clusters correlation…* Sci Rep. https://doi.org/10.1038/s41598-018-29035-z
 ---
-### References: 
+### References
 
-1. The Effects of Codon Usage on Protein Structure and Folding /
-McKenze J. Moss, Laura M. Chamness, and Patricia L. Clark
-2. Synonymous but Not Silent: The Codon Usage Code for Gene Expression and Protein Folding /
-Yi Liu, Qian Yang, and Fangzhou Zhao
-3. The codon adaptation index-a measure of directional synonymous codon usage bias, and its potential applications /
-Paul M. Sharp, Wen-Hsiung Li
-4. %MinMax: A versatile tool for calculating and comparing synonymous codon usage and its impact on protein folding /
-Anabel Rodriguez, Gabriel Wright, Scott Emrich, Patricia L. Clark
-5. Accurate structure prediction of biomolecular interactions with AlphaFold 3 /
-Josh Abramson et. al.
-6. Afflecto: A Web Server to Generate Conformational Ensembles of Flexible Proteins from Alphafold Models /
-Matyas Pajkos, Ilinka Clerc, Christophe Zanon, Pau Bernado, Juan Cortes
-
----
-
-
+1. Moss, M. J., Chamness, L. M. & Clark, P. L. *The Effects of Codon Usage on Protein Structure and Folding.*
+2. Liu, Y., Yang, Q. & Zhao, F. *Synonymous but Not Silent: The Codon Usage Code for Gene Expression and Protein Folding.*
+3. Sharp, P. M. & Li, W.-H. *The codon adaptation index — a measure of directional synonymous codon usage bias, and its potential applications.*
+4. Rodriguez, A., Wright, G., Emrich, S. & Clark, P. L. *%MinMax: A versatile tool for calculating and comparing synonymous codon usage and its impact on protein folding.* Protein Science (2018). https://doi.org/10.1002/pro.3336
+5. Abramson, J. *et al.* *Accurate structure prediction of biomolecular interactions with AlphaFold 3.*
+6. Pajkos, M., Clerc, I., Zanon, C., Bernadó, P. & Cortés, J. *Afflecto: A Web Server to Generate Conformational Ensembles of Flexible Proteins from AlphaFold Models.*
+7. Wright, G., Rodriguez, A., Li, J., Milenkovic, T., Emrich, S. & Clark, P. L. *CHARMING: Harmonizing synonymous codon usage to replicate a desired codon usage pattern.* Protein Science (2021). https://doi.org/10.1002/pro.4223
+8. Claassens, N. J. *et al.* *Codon Harmonizer.* PLoS ONE (2017). http://codonharmonizer.systemsbiology.nl/
+9. Zulkower, V. & Rosser, S. *DnaChisel, a versatile sequence optimizer.* Edinburgh Genome Foundry — constraint-based codon optimization. https://edinburgh-genome-foundry.github.io/DnaChisel/
+10. Pellizza, L., Smal, C., Rodrigo, G. & Arán, M. *Codon usage clusters correlation: towards protein solubility prediction in heterologous expression systems in E. coli.* Scientific Reports (2018). https://doi.org/10.1038/s41598-018-29035-z
