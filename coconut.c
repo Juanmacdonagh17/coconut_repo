@@ -292,16 +292,170 @@ char* fetchGeneID(const char *species, const char *geneName) {
 
     return ensg_id; // free() this after use
 }
+// resolve the Ensembl id out of a UniProt JSON payload
+// split out of fetchEnsemblGeneFromUniProt so the parsing can be tested without curl
+// this is a very home made approach
+// all of this just not to use a json parser, so there's no extra need for libraries
+
+static const char *ensembl_tags[] = {
+    "Ensembl", "EnsemblBacteria", "EnsemblFungi",
+    "EnsemblMetazoa", "EnsemblPlants", "EnsemblProtists"
+};
+static const int num_ensembl_tags = 6;
+
+static int isEnsemblRecord(const char *cursor) {
+    const char *name = cursor + strlen("\"database\":\"");
+    for (int i = 0; i < num_ensembl_tags; i++)
+        if (strncmp(name, ensembl_tags[i], strlen(ensembl_tags[i])) == 0) return 1;
+    return 0;
+}
+
+// end of the current cross-reference record: next "database":" or end of buffer
+// without this bound a record borrows the isoformId of a later one
+static char* recordEnd(char *cursor) {
+    char *next = strstr(cursor + 1, "\"database\":\"");
+    return next ? next : cursor + strlen(cursor);
+}
+
+// isoformId of THIS record only, NULL when the record carries none
+static char* recordIsoformId(char *cursor, char *end, size_t *len_out) {
+    char *tag = strstr(cursor, "\"isoformId\":\"");
+    if (!tag || tag >= end) return NULL;
+    tag += strlen("\"isoformId\":\"");
+    char *close = strchr(tag, '\"');
+    if (!close || close >= end) return NULL;
+    *len_out = (size_t)(close - tag);
+    return tag;
+}
+
+// id of THIS record only. ENS is the "soft" part, ENST, ENMUST, etc are the specific ids
+// for diff orgs, and EnsemblBacteria ids are not ENS-prefixed at all, so match on "id" alone
+static char* recordId(char *cursor, char *end) {
+    char *id_field = strstr(cursor, "\"id\":\"");
+    if (!id_field || id_field >= end) return NULL;
+    id_field += strlen("\"id\":\"");
+    char *id_end = strchr(id_field, '\"');
+    if (!id_end || id_end >= end) return NULL;
+    size_t id_len = (size_t)(id_end - id_field);
+    char *ens_id = malloc(id_len + 1);
+    if (!ens_id) return NULL;
+    memcpy(ens_id, id_field, id_len);
+    ens_id[id_len] = '\0';
+    // strip version, we don't need the version part
+    char *dot_ptr = strchr(ens_id, '.');
+    if (dot_ptr) *dot_ptr = '\0';
+    return ens_id;
+}
+
+static char* resolveEnsemblId(char *json, const char *uniprot_id) {
+    // isoform accession: UniProt scopes the whole response to that isoform, so the xrefs
+    // are already filtered and the isoformId key is dropped. Take it, but check the scope first
+    if (strchr(uniprot_id, '-')) {
+        char expect[128];
+        snprintf(expect, sizeof(expect), "\"primaryAccession\":\"%s\"", uniprot_id);
+        if (!strstr(json, expect)) {
+            fprintf(stderr, "uniprot: response not scoped to isoform %s, refusing to guess\n", uniprot_id);
+            return NULL;
+        }
+        for (char *cursor = json; (cursor = strstr(cursor, "\"database\":\"")); cursor++) {
+            if (!isEnsemblRecord(cursor)) continue;
+            char *id = recordId(cursor, recordEnd(cursor));
+            if (id) return id;
+        }
+        fprintf(stderr, "uniprot: no Ensembl transcript mapped to isoform %s\n", uniprot_id);
+        return NULL;
+    }
+
+    // get the isoform list
+    char *displayed_isoform = NULL;
+    char *isoforms_start = strstr(json, "\"isoforms\"");
+    if (isoforms_start) {
+        char *cursor = strchr(isoforms_start, '{');
+        while (cursor) {
+            char *block_start = cursor;
+            int brace_count = 1;
+            cursor++;
+            while (brace_count > 0 && *cursor) {
+                if (*cursor == '{') brace_count++;
+                else if (*cursor == '}') brace_count--;
+                cursor++;
+            }
+            if (brace_count != 0) break;  // malformed JSON
+            size_t block_len = (size_t)(cursor - block_start);
+            char *block = malloc(block_len + 1);
+            if (!block) break;
+            memcpy(block, block_start, block_len);
+            block[block_len] = '\0';
+            // the "main" or canonical isoform has the "Displayed" tag
+            if (strstr(block, "\"isoformSequenceStatus\":\"Displayed\"")) {
+                // extract the id
+                char *id_start = strstr(block, "\"isoformIds\":[\"");
+                if (id_start) {
+                    id_start += strlen("\"isoformIds\":[\"");
+                    char *id_end = strchr(id_start, '\"');
+                    if (id_end) {
+                        size_t iso_len = (size_t)(id_end - id_start);
+                        displayed_isoform = malloc(iso_len + 1);
+                        if (displayed_isoform) {
+                            memcpy(displayed_isoform, id_start, iso_len);
+                            displayed_isoform[iso_len] = '\0';
+                        }
+                        free(block);
+                        break;  // found it
+                    }
+                }
+            }
+            free(block);
+        }
+    }
+
+    // with a displayed isoform we match its tag record by record. The first Ensembl entry is
+    // NOT necessarily the canonical one, the API orders by transcript id (see Q16665)
+    if (displayed_isoform) {
+        size_t displayed_len = strlen(displayed_isoform);
+        char *untagged = NULL;
+        for (char *cursor = json; (cursor = strstr(cursor, "\"database\":\"")); cursor++) {
+            if (!isEnsemblRecord(cursor)) continue;
+            char *end = recordEnd(cursor);
+            size_t iso_len = 0;
+            char *iso_tag = recordIsoformId(cursor, end, &iso_len);
+            if (iso_tag && iso_len == displayed_len &&
+                strncmp(iso_tag, displayed_isoform, displayed_len) == 0) {
+                char *ens_id = recordId(cursor, end);
+                free(displayed_isoform);
+                return ens_id;
+            }
+            if (!iso_tag && !untagged) untagged = cursor;
+        }
+        // no tagged match: an untagged record is the only one that can still belong to the
+        // canonical isoform. Records tagged for another isoform are never acceptable here
+        if (untagged) {
+            fprintf(stderr, "uniprot: no Ensembl xref tagged %s, falling back to an untagged record\n",
+                    displayed_isoform);
+            char *ens_id = recordId(untagged, recordEnd(untagged));
+            free(displayed_isoform);
+            return ens_id;
+        }
+        fprintf(stderr, "uniprot: every Ensembl xref belongs to a non-displayed isoform (%s), refusing to guess\n",
+                displayed_isoform);
+        free(displayed_isoform);
+        return NULL;
+    }
+
+    // if no isoform or Displayed tag is found, get first Ensembl-like entry
+    for (char *cursor = json; (cursor = strstr(cursor, "\"database\":\"")); cursor++) {
+        if (!isEnsemblRecord(cursor)) continue;
+        char *ens_id = recordId(cursor, recordEnd(cursor));
+        if (ens_id) return ens_id;
+    }
+    return NULL;
+}
+
 // fetch Ensembl transcript ID from UniProt ID
 // The CC coment is necesary to select the correct isoform!!
 // also all of the different Ensembl db's are used in the request
 
 char* fetchEnsemblGeneFromUniProt(const char *uniprot_id) {
-    const char *ensembl_tags[] = {
-        "Ensembl", "EnsemblBacteria", "EnsemblFungi",
-        "EnsemblMetazoa", "EnsemblPlants", "EnsemblProtists"
-    };
-    int num_tags = sizeof(ensembl_tags) / sizeof(ensembl_tags[0]);
 
     char url[512];
     snprintf(url, sizeof(url),
@@ -331,173 +485,9 @@ char* fetchEnsemblGeneFromUniProt(const char *uniprot_id) {
         return NULL;
     }
 
-    // this is a very home made approach
-    // all of this just not to use a json parser, so there's no extra need for libraries 
-    
-
-    // get the isoform list
-    char *cursor = chunk.memory;
-    char *displayed_isoform = NULL;
-    char *isoforms_start = strstr(chunk.memory, "\"isoforms\"");
-
-    if (isoforms_start) {
-    
-        char *cursor = strchr(isoforms_start, '{');
-        while (cursor) {
-            char *block_start = cursor;
-            int brace_count = 1;
-            cursor++;
-
-            while (brace_count > 0 && *cursor) {
-                if (*cursor == '{') brace_count++;
-                else if (*cursor == '}') brace_count--;
-                cursor++;
-            }
-
-            if (brace_count != 0) break;  // malformed JSON
-
-            size_t block_len = cursor - block_start;
-            char *block = malloc(block_len + 1);
-            strncpy(block, block_start, block_len);
-            block[block_len] = '\0';
-
-            // the "main" or canonical isoform has the "Displayed" tag
-            if (strstr(block, "\"isoformSequenceStatus\":\"Displayed\"")) {
-                // extract the id
-                char *id_start = strstr(block, "\"isoformIds\":[\"");
-                if (id_start) {
-                    id_start += strlen("\"isoformIds\":[\"");
-                    char *id_end = strchr(id_start, '\"');
-                    if (id_end) {
-                        size_t iso_len = id_end - id_start;
-                        displayed_isoform = malloc(iso_len + 1);
-                        strncpy(displayed_isoform, id_start, iso_len);
-                        displayed_isoform[iso_len] = '\0';
-
-                        free(block);
-                        break;  // found it
-                    }
-                }
-            }
-
-            free(block);
-        }
-    }
-
-    // now, if there's a displayed isoform, we just look for the first appreance of an ENT id
-    // according to the UniProt team (and my experience so far) the order does not really matter if all of the ENT belong to the canonical isoform
-    // the main difference are only intros, that we do not care about here
-
-    if (displayed_isoform) {
-        cursor = chunk.memory;
-        char *match_block = NULL;
-
-    while ((cursor = strstr(cursor, "\"database\":\""))) {
-            int valid = 0;
-            for (int i = 0; i < num_tags; i++) {
-            if (strncmp(cursor + strlen("\"database\":\""), ensembl_tags[i], strlen(ensembl_tags[i])) == 0) {
-                    valid = 1;
-                    break;
-                }
-            }
-            if (!valid) {
-                cursor++;
-                continue;
-            }
-
-            char *iso_tag = strstr(cursor, "\"isoformId\":\"");
-            if (!iso_tag) {
-                cursor++;
-                continue;
-            }
-
-            iso_tag += strlen("\"isoformId\":\"");
-            if (strncmp(iso_tag, displayed_isoform, strlen(displayed_isoform)) != 0) {
-                cursor++;
-                continue;
-            }
-
-            match_block = cursor;
-            break;
-        }
-
-        free(displayed_isoform);
-        // get rid of the iso id, get the ens, move on. ENS is the "soft" part, ENST, ENMUST, etc are the specific ids for diff orgs. In general this should work?
-        if (match_block) {
-        char *id_field = strstr(match_block, "\"id\":\"ENS");
-            if (!id_field) {
-                free(chunk.memory);
-                return NULL;
-            }
-
-            id_field += strlen("\"id\":\"");
-            char *id_end = strchr(id_field, '\"');
-
-            if (!id_end) {
-                free(chunk.memory);
-                return NULL;
-            }
-
-            size_t id_len = id_end - id_field;
-            char *ensg_id = malloc(id_len + 1);
-            strncpy(ensg_id, id_field, id_len);
-            ensg_id[id_len] = '\0';
-
-            // strip version, we don't need the version part
-            char *dot_ptr = strchr(ensg_id, '.');
-            if (dot_ptr) {
-                *dot_ptr = '\0';
-            }
-
-            free(chunk.memory);
-            return ensg_id;
-        }
-    }
-
-    // if no isoform or Displayed tag is found, get first Ensembl-like entry
-    cursor = chunk.memory;
-    while ((cursor = strstr(cursor, "\"database\":\""))) {
-        int valid = 0;
-        for (int i = 0; i < num_tags; i++) {
-            if (strncmp(cursor + 12, ensembl_tags[i], strlen(ensembl_tags[i])) == 0) {
-                valid = 1;
-                break;
-            }
-        }
-        if (!valid) {
-            cursor++;
-            continue;
-        }
-
-        char *id_field = strstr(cursor, "\"id\":\"");
-        if (!id_field) {
-            cursor++;
-            continue;
-        }
-
-        id_field += strlen("\"id\":\"");
-        char *id_end = strchr(id_field, '\"');
-        if (!id_end) {
-            cursor++;
-            continue;
-        }
-
-        size_t id_len = id_end - id_field;
-        char *fallback_id = malloc(id_len + 1);
-        strncpy(fallback_id, id_field, id_len);
-        fallback_id[id_len] = '\0';
-
-        char *dot_ptr = strchr(fallback_id, '.');
-        if (dot_ptr) {
-            *dot_ptr = '\0';
-        }
-
-        free(chunk.memory);
-        return fallback_id;
-    }
-
+    char *ens_id = resolveEnsemblId(chunk.memory, uniprot_id);
     free(chunk.memory);
-    return NULL;
+    return ens_id;
 }
 
 
